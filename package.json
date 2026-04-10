@@ -1,0 +1,20 @@
+{
+  "name": "the-next",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "cd packages/app && bun run tauri dev",
+    "build": "cd packages/app && bun run tauri build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.11",
+    "@types/bun": "latest",
+    "typescript": "~5.8.3"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@the-next/core",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "main": "src/index.ts",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
