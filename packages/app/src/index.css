@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/*
+ * The Next — 自定义主题
+ *
+ * 主题色: #529c4f (自然绿)
+ * 背景色: #eeeee8 (暖米白)
+ *
+ * 颜色空间: oklch (感知均匀色彩空间)
+ * #529c4f → oklch(0.62 0.14 142)
+ * #eeeee8 → oklch(0.95 0.005 100)
+ */
+
+@theme inline {
+  --color-background: oklch(0.95 0.005 100);
+  --color-foreground: oklch(0.2 0.02 240);
+  --color-card: oklch(0.99 0.002 100);
+  --color-card-foreground: oklch(0.2 0.02 240);
+  --color-popover: oklch(0.99 0.002 100);
+  --color-popover-foreground: oklch(0.2 0.02 240);
+  --color-primary: oklch(0.62 0.14 142);
+  --color-primary-foreground: oklch(0.99 0 0);
+  --color-secondary: oklch(0.92 0.01 100);
+  --color-secondary-foreground: oklch(0.25 0.02 240);
+  --color-muted: oklch(0.92 0.008 110);
+  --color-muted-foreground: oklch(0.5 0.01 240);
+  --color-accent: oklch(0.88 0.03 142);
+  --color-accent-foreground: oklch(0.25 0.02 240);
+  --color-destructive: oklch(0.58 0.22 27);
+  --color-border: oklch(0.88 0.01 100);
+  --color-input: oklch(0.88 0.01 100);
+  --color-ring: oklch(0.62 0.14 142);
+
+  --radius: 0.625rem;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* 侧边栏（预留，当前未使用） */
+  --color-sidebar: oklch(0.93 0.008 110);
+  --color-sidebar-foreground: oklch(0.2 0.02 240);
+  --color-sidebar-primary: oklch(0.62 0.14 142);
+  --color-sidebar-primary-foreground: oklch(0.99 0 0);
+  --color-sidebar-accent: oklch(0.88 0.03 142);
+  --color-sidebar-accent-foreground: oklch(0.25 0.02 240);
+  --color-sidebar-border: oklch(0.88 0.01 100);
+  --color-sidebar-ring: oklch(0.62 0.14 142);
+
+  /* 图表色板 */
+  --color-chart-1: oklch(0.62 0.14 142);
+  --color-chart-2: oklch(0.55 0.12 200);
+  --color-chart-3: oklch(0.65 0.1 60);
+  --color-chart-4: oklch(0.58 0.15 300);
+  --color-chart-5: oklch(0.7 0.08 30);
+}
+
+/*
+ * 全局基础样式
+ *
+ * - 使用 Inter 字体栈（macOS 回退到 system-ui）
+ * - 抗锯齿渲染
+ * - 边框使用主题 border 颜色
+ * - 全局过渡动画
+ */
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Inter", "SF Pro Display", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

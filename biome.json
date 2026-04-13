@@ -39,6 +39,18 @@
       "arrowParentheses": "always"
     }
   },
+  "css": {
+    "parser": {
+      "cssModules": false,
+      "tailwindDirectives": true
+    },
+    "linter": {
+      "enabled": true
+    },
+    "formatter": {
+      "enabled": true
+    }
+  },
   "json": {
     "formatter": {
       "trailingCommas": "none"
