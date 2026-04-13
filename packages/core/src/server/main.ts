@@ -2,11 +2,11 @@
  * bun ws server
  */
 import type { ServerWebSocket } from 'bun'
+import { runAgent } from '../agent/loop'
 import type { AgentConfig } from '../types/config'
 import { loadConfig, saveConfig } from './config'
-import { jsonResponse, maskApiKey } from './utils'
 import type { ClientMessage, ServerMessage } from './protocol'
-import { runAgent } from '../agent/loop'
+import { jsonResponse, maskApiKey } from './utils'
 
 const PREFERRED_PORT = Number(process.env.PORT) || 3001
 const PORT_RANGE = 10

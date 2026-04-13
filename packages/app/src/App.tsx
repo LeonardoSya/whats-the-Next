@@ -1,12 +1,12 @@
+import { Settings } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ChatInput } from '@/components/ChatInput'
 import { ChatMessage } from '@/components/ChatMessage'
-import { StatusIndicator } from '@/components/StatusIndicator'
 import { SettingsPanel } from '@/components/SettingsPanel'
+import { StatusIndicator } from '@/components/StatusIndicator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAgent } from '@/hooks/useAgent'
 import { discoverServer, getHttpBase } from '@/lib/server'
-import { Settings } from 'lucide-react'
 
 /**
  * 应用根组件 — The Next 聊天界面
