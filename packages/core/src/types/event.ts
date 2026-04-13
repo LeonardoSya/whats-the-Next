@@ -20,7 +20,14 @@ import type { AgentState, AssistantMessage } from './message'
  * }
  * ```
  */
-export type AgentEvent = StateChangeEvent | TextDeltaEvent | MessageCompleteEvent | ErrorEvent
+export type AgentEvent =
+  | StateChangeEvent
+  | TextDeltaEvent
+  | MessageCompleteEvent
+  | ErrorEvent
+  | ToolCallEvent
+  | ToolResultEvent
+  | ToolErrorEvent
 
 /**
  * 状态变更事件。
@@ -59,5 +66,44 @@ export type MessageCompleteEvent = {
 
 export type ErrorEvent = {
   readonly type: 'error'
+  readonly error: string
+}
+
+/**
+ * 工具调用事件。
+ *
+ * LLM 决定调用工具时产出，携带工具名和参数。
+ * UI 层据此显示"正在调用 xxx 工具"的状态。
+ */
+export type ToolCallEvent = {
+  readonly type: 'tool_call'
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly args: Record<string, unknown>
+}
+
+/**
+ * 工具结果事件。
+ *
+ * 工具执行完成后产出，携带执行结果。
+ * UI 层据此展示工具返回数据。
+ */
+export type ToolResultEvent = {
+  readonly type: 'tool_result'
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly result: unknown
+}
+
+/**
+ * 工具执行错误事件。
+ *
+ * 工具的 execute 函数抛出异常时产出。
+ * UI 层据此在对应的工具卡片上展示错误信息。
+ */
+export type ToolErrorEvent = {
+  readonly type: 'tool_error'
+  readonly toolCallId: string
+  readonly toolName: string
   readonly error: string
 }

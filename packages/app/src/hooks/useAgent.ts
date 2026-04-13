@@ -2,15 +2,35 @@ import type { AgentState, Message } from '@the-next/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { discoverServer, getWsUrl, resetDiscovery } from '@/lib/server'
 
+type ToolCallInfo = {
+  toolCallId: string
+  toolName: string
+  args: Record<string, unknown>
+  result?: unknown
+  status: 'calling' | 'done' | 'error'
+  error?: string
+}
+
 type ServerMessage = {
   type: 'ready' | 'event' | 'error'
   id?: string
   event?: {
-    type: 'state_change' | 'text_delta' | 'message_complete' | 'error'
+    type:
+      | 'state_change'
+      | 'text_delta'
+      | 'message_complete'
+      | 'error'
+      | 'tool_call'
+      | 'tool_result'
+      | 'tool_error'
     state?: AgentState
     delta?: string
     message?: Message
     error?: string
+    toolCallId?: string
+    toolName?: string
+    args?: Record<string, unknown>
+    result?: unknown
   }
   error?: string
 }
@@ -20,6 +40,7 @@ export function useAgent() {
   const [agentState, setAgentState] = useState<AgentState>('idle')
   const [streamingText, setStreamingText] = useState('')
   const [connected, setConnected] = useState(false)
+  const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([])
 
   const wsRef = useRef<WebSocket | null>(null)
   const requestIdRef = useRef<string | null>(null)
@@ -81,6 +102,51 @@ export function useAgent() {
                 }
               }
               break
+
+            case 'tool_call': {
+              const tcId = event.toolCallId
+              const tcName = event.toolName
+              if (tcId && tcName) {
+                setToolCalls((prev) => [
+                  ...prev,
+                  {
+                    toolCallId: tcId,
+                    toolName: tcName,
+                    args: event.args ?? {},
+                    status: 'calling',
+                  },
+                ])
+              }
+              break
+            }
+
+            case 'tool_result': {
+              const trId = event.toolCallId
+              if (trId) {
+                setToolCalls((prev) =>
+                  prev.map((tc) =>
+                    tc.toolCallId === trId
+                      ? { ...tc, result: event.result, status: 'done' as const }
+                      : tc,
+                  ),
+                )
+              }
+              break
+            }
+
+            case 'tool_error': {
+              const teId = event.toolCallId
+              if (teId) {
+                setToolCalls((prev) =>
+                  prev.map((tc) =>
+                    tc.toolCallId === teId
+                      ? { ...tc, error: event.error, status: 'error' as const }
+                      : tc,
+                  ),
+                )
+              }
+              break
+            }
 
             case 'message_complete':
               {
@@ -154,6 +220,7 @@ export function useAgent() {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
 
       streamBufferRef.current = ''
+      setToolCalls([])
 
       const userMessage: Message = {
         type: 'user',
@@ -197,6 +264,7 @@ export function useAgent() {
     agentState,
     streamingText,
     connected,
+    toolCalls,
     sendMessage,
     abort,
   }

@@ -15,6 +15,9 @@ export type {
   MessageCompleteEvent,
   StateChangeEvent,
   TextDeltaEvent,
+  ToolCallEvent,
+  ToolErrorEvent,
+  ToolResultEvent,
 } from './types/event'
 
 // 消息类型
@@ -23,6 +26,8 @@ export type {
   AssistantMessage,
   Message,
   SystemMessage,
+  ToolCallMessage,
+  ToolResultMessage,
   UserMessage,
 } from './types/message'
 
@@ -30,5 +35,12 @@ export type {
 export {
   createAssistantMessage,
   createSystemMessage,
+  createToolCallMessage,
+  createToolResultMessage,
   createUserMessage,
 } from './types/message.js'
+
+// 工具系统
+export type { ToolDefinition } from './tools/types'
+export { toSDKTools } from './tools/types'
+export { getDefaultTools } from './tools/registry'

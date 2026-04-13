@@ -14,7 +14,12 @@
  */
 export type AgentState = 'idle' | 'thinking' | 'streaming' | 'tool_calling' | 'error' | 'done'
 
-export type Message = UserMessage | AssistantMessage | SystemMessage
+export type Message =
+  | UserMessage
+  | AssistantMessage
+  | SystemMessage
+  | ToolCallMessage
+  | ToolResultMessage
 
 /**
  * 用户消息
@@ -51,6 +56,34 @@ export type SystemMessage = {
 }
 
 /**
+ * 工具调用消息
+ *
+ * LLM 决定调用某个工具时产生，记录工具名和参数
+ */
+export type ToolCallMessage = {
+  readonly type: 'tool_call'
+  readonly id: string
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly args: Record<string, unknown>
+  readonly timestamp: number
+}
+
+/**
+ * 工具结果消息
+ *
+ * 工具执行完成后产生，记录执行结果
+ */
+export type ToolResultMessage = {
+  readonly type: 'tool_result'
+  readonly id: string
+  readonly toolCallId: string
+  readonly toolName: string
+  readonly result: unknown
+  readonly timestamp: number
+}
+
+/**
  * 创建用户消息
  */
 export const createUserMessage = (content: string): UserMessage => ({
@@ -79,5 +112,31 @@ export const createSystemMessage = (content: string): SystemMessage => ({
   type: 'system',
   id: crypto.randomUUID(),
   content,
+  timestamp: Date.now(),
+})
+
+export const createToolCallMessage = (
+  toolCallId: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): ToolCallMessage => ({
+  type: 'tool_call',
+  id: crypto.randomUUID(),
+  toolCallId,
+  toolName,
+  args,
+  timestamp: Date.now(),
+})
+
+export const createToolResultMessage = (
+  toolCallId: string,
+  toolName: string,
+  result: unknown,
+): ToolResultMessage => ({
+  type: 'tool_result',
+  id: crypto.randomUUID(),
+  toolCallId,
+  toolName,
+  result,
   timestamp: Date.now(),
 })

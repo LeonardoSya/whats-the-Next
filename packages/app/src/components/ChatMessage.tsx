@@ -16,8 +16,13 @@ type ChatMessageProps = {
  * - 用户消息：靠右，主题绿色背景
  * - 助手消息：靠左，白色卡片背景 + logo 头像
  * - 流式输出时显示闪烁光标
+ * - tool_call / tool_result 类型不在此组件渲染（由 ToolCallCard 处理）
  */
 export function ChatMessage({ message, isStreaming = false }: ChatMessageProps) {
+  if (message.type === 'tool_call' || message.type === 'tool_result' || message.type === 'system') {
+    return null
+  }
+
   const isUser = message.type === 'user'
 
   return (
@@ -47,7 +52,7 @@ export function ChatMessage({ message, isStreaming = false }: ChatMessageProps) 
             : 'bg-card text-card-foreground border border-border rounded-tl-sm',
         )}
       >
-        <p className="whitespace-pre-wrap break-words">
+        <p className="whitespace-pre-wrap wrap-break-word">
           {message.content}
           {isStreaming && (
             <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current" />

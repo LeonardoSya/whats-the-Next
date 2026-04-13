@@ -3,6 +3,7 @@
  */
 import type { ServerWebSocket } from 'bun'
 import { runAgent } from '../agent/loop'
+import { getDefaultTools } from '../tools/registry'
 import type { AgentConfig } from '../types/config'
 import { loadConfig, saveConfig } from './config'
 import type { ClientMessage, ServerMessage } from './protocol'
@@ -88,8 +89,10 @@ const handleChat = async (
     maxTokens: config.maxTokens,
   }
 
+  const tools = getDefaultTools()
+
   try {
-    for await (const event of runAgent(agentConfig, messages.messages)) {
+    for await (const event of runAgent(agentConfig, messages.messages, tools)) {
       if (abortFlags.get(id)) {
         abortFlags.delete(id)
         send(ws, { type: 'event', id, event: { type: 'state_change', state: 'idle' } })

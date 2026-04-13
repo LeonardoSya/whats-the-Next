@@ -4,6 +4,7 @@ import { ChatInput } from '@/components/ChatInput'
 import { ChatMessage } from '@/components/ChatMessage'
 import { SettingsPanel } from '@/components/SettingsPanel'
 import { StatusIndicator } from '@/components/StatusIndicator'
+import { ToolCallCard } from '@/components/ToolCallCard'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAgent } from '@/hooks/useAgent'
 import { discoverServer, getHttpBase } from '@/lib/server'
@@ -20,7 +21,8 @@ function App() {
   const [hasConfig, setHasConfig] = useState<boolean | null>(null)
   const [showSettings, setShowSettings] = useState(false)
 
-  const { messages, agentState, streamingText, connected, sendMessage, abort } = useAgent()
+  const { messages, agentState, streamingText, connected, toolCalls, sendMessage, abort } =
+    useAgent()
   const viewportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -103,6 +105,10 @@ function App() {
 
           {messages.map((message) => (
             <ChatMessage key={message.id} message={message} />
+          ))}
+
+          {toolCalls.map((tc) => (
+            <ToolCallCard key={tc.toolCallId} toolCall={tc} />
           ))}
 
           {streamingText && (

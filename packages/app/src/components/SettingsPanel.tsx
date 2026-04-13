@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { discoverServer, getHttpBase } from '@/lib/server'
 
 type SettingsPanelProps = {
@@ -36,6 +37,7 @@ export function SettingsPanel({ open, onOpenChange, onSaved }: SettingsPanelProp
   const [apiKey, setApiKey] = useState('')
   const [baseURL, setBaseURL] = useState('https://api.minimaxi.com/v1')
   const [model, setModel] = useState('MiniMax-M2.7')
+  const [systemPrompt, setSystemPrompt] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -50,6 +52,7 @@ export function SettingsPanel({ open, onOpenChange, onSaved }: SettingsPanelProp
         if (config.configured) {
           if (config.baseURL) setBaseURL(config.baseURL)
           if (config.model) setModel(config.model)
+          if (config.systemPrompt) setSystemPrompt(config.systemPrompt)
         }
       } catch {
         // 首次使用或服务未启动
@@ -76,6 +79,7 @@ export function SettingsPanel({ open, onOpenChange, onSaved }: SettingsPanelProp
           apiKey: apiKey.trim(),
           baseURL: baseURL.trim(),
           model: model.trim(),
+          systemPrompt: systemPrompt.trim() || undefined,
         }),
       })
       if (!res.ok) throw new Error('Save failed')
@@ -85,7 +89,7 @@ export function SettingsPanel({ open, onOpenChange, onSaved }: SettingsPanelProp
     } finally {
       setSaving(false)
     }
-  }, [apiKey, baseURL, model, saving, onSaved])
+  }, [apiKey, baseURL, model, systemPrompt, saving, onSaved])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -127,6 +131,18 @@ export function SettingsPanel({ open, onOpenChange, onSaved }: SettingsPanelProp
               placeholder="MiniMax-M2.7"
               value={model}
               onChange={(e) => setModel(e.target.value)}
+            />
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="system-prompt">System Prompt</Label>
+            <Textarea
+              id="system-prompt"
+              placeholder="可选，定义 AI 的角色和行为..."
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              rows={4}
+              className="resize-y"
             />
           </div>
 
