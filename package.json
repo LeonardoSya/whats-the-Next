@@ -7,6 +7,11 @@
   ],
   "scripts": {
     "dev": "cd packages/app && bun run tauri dev",
+    "dev:servers": "bun run dev:core & bun run dev:app",
+    "dev:core": "cd packages/core && bun --hot src/server/main.ts",
+    "dev:app": "cd packages/app && vite",
+    "build:core": "cd packages/core && bun build src/server/main.ts --compile --outfile ../app/src-tauri/binaries/the-next-core-aarch64-apple-darwin",
+    "build:all": "bun run build:core && cd packages/app && tsc && vite build",
     "build": "cd packages/app && bun run tauri build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

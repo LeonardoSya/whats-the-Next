@@ -1,9 +1,12 @@
 {
   "name": "@the-next/core",
-  "module": "index.ts",
   "type": "module",
   "private": true,
   "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun --hot src/server/main.ts",
+    "start": "bun src/server/main.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },

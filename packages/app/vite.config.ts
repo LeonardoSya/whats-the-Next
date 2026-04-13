@@ -5,14 +5,7 @@ import { defineConfig } from 'vite'
 
 const host = process.env.TAURI_DEV_HOST
 
-/**
- * Vite 配置 — Tauri + React + Tailwind CSS v4
- *
- * - `@tailwindcss/vite` 插件处理 Tailwind 的 CSS 编译
- * - `@` 路径别名映射到 `./src`，与 shadcn/ui 约定一致
- * - Tauri 相关配置保持固定端口和 HMR 设置
- */
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [react(), tailwindcss()],
 
   resolve: {
@@ -21,7 +14,6 @@ export default defineConfig(async () => ({
     },
   },
 
-  /* Tauri 开发专用配置 */
   clearScreen: false,
   server: {
     port: 1420,
@@ -38,4 +30,4 @@ export default defineConfig(async () => ({
       ignored: ['**/src-tauri/**'],
     },
   },
-}))
+})

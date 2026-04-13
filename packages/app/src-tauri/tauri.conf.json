@@ -1,18 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "app",
+  "productName": "The Next",
   "version": "0.1.0",
   "identifier": "com.yiyi.app",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "cd ../core && bun --hot src/server/main.ts & vite",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "cd ../.. && bun run build:core && cd packages/app && tsc && vite build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "app",
+        "title": "The Next",
         "width": 800,
         "height": 600
       }
@@ -24,6 +24,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/the-next-core"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
