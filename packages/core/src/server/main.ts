@@ -2,8 +2,11 @@
  * bun ws server
  */
 import type { ServerWebSocket } from 'bun'
+import type { AgentContext } from '../agent/context'
 import { runAgent } from '../agent/loop'
+import type { ApprovalCallback } from '../tools/permission'
 import { getDefaultTools } from '../tools/registry'
+import { toSDKTools } from '../tools/types'
 import type { AgentConfig } from '../types/config'
 import { loadConfig, saveConfig } from './config'
 import type { ClientMessage, ServerMessage } from './protocol'
@@ -14,6 +17,9 @@ const PORT_RANGE = 10
 
 // Map<对话id, 是否终端>
 const abortFlags = new Map<string, boolean>()
+
+// Map<permissionId, resolve函数> — 桥接 WebSocket 异步响应与 Promise
+const pendingPermissions = new Map<string, (approved: boolean) => void>()
 
 const send = (ws: ServerWebSocket, msg: ServerMessage) => {
   ws.send(JSON.stringify(msg))
@@ -67,6 +73,32 @@ const handleApiRequest = async (req: Request): Promise<Response> => {
   return jsonResponse({ error: 'Not found' }, 404)
 }
 
+/**
+ * 创建基于 WebSocket 的权限审批回调。
+ * 当 dangerous 工具被调用时：
+ * 1. 向前端发送 permission_request 事件
+ * 2. 返回一个 Promise 等待前端的 permission_response
+ */
+const createApprovalCallback = (ws: ServerWebSocket, chatId: string): ApprovalCallback => {
+  return (request) => {
+    send(ws, {
+      type: 'event',
+      id: chatId,
+      event: {
+        type: 'permission_request',
+        permissionId: request.permissionId,
+        toolName: request.toolName,
+        args: request.args,
+        riskLevel: request.riskLevel,
+      },
+    })
+
+    return new Promise<boolean>((resolve) => {
+      pendingPermissions.set(request.permissionId, resolve)
+    })
+  }
+}
+
 const handleChat = async (
   ws: ServerWebSocket,
   id: string,
@@ -81,18 +113,22 @@ const handleChat = async (
   // 用户发起对话
   abortFlags.set(id, false)
 
-  const agentConfig: AgentConfig = {
-    model: config.model,
-    apiKey: config.apiKey,
-    baseURL: config.baseURL,
-    systemPrompt: config.systemPrompt,
-    maxTokens: config.maxTokens,
+  const approve = createApprovalCallback(ws, id)
+
+  const agentContext: AgentContext = {
+    config: {
+      model: config.model,
+      apiKey: config.apiKey,
+      baseURL: config.baseURL,
+      systemPrompt: config.systemPrompt,
+      maxTokens: config.maxTokens,
+    },
+    messages: messages.messages,
+    tools: toSDKTools(getDefaultTools(), approve),
   }
 
-  const tools = getDefaultTools()
-
   try {
-    for await (const event of runAgent(agentConfig, messages.messages, tools)) {
+    for await (const event of runAgent(agentContext)) {
       if (abortFlags.get(id)) {
         abortFlags.delete(id)
         send(ws, { type: 'event', id, event: { type: 'state_change', state: 'idle' } })
@@ -139,6 +175,14 @@ const serverOptions = {
           case 'abort':
             abortFlags.set(msg.id, true)
             break
+          case 'permission_response': {
+            const resolve = pendingPermissions.get(msg.permissionId)
+            if (resolve) {
+              resolve(msg.approved)
+              pendingPermissions.delete(msg.permissionId)
+            }
+            break
+          }
         }
       } catch {
         send(ws, { type: 'error', id: 'system', error: 'Invalid message format' })
@@ -146,6 +190,10 @@ const serverOptions = {
     },
     close() {
       abortFlags.clear()
+      for (const resolve of pendingPermissions.values()) {
+        resolve(false)
+      }
+      pendingPermissions.clear()
     },
   },
 }

@@ -2,6 +2,7 @@ import { Settings } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { ChatInput } from '@/components/ChatInput'
 import { ChatMessage } from '@/components/ChatMessage'
+import { PermissionDialog } from '@/components/PermissionDialog'
 import { SettingsPanel } from '@/components/SettingsPanel'
 import { StatusIndicator } from '@/components/StatusIndicator'
 import { ToolCallCard } from '@/components/ToolCallCard'
@@ -21,8 +22,17 @@ function App() {
   const [hasConfig, setHasConfig] = useState<boolean | null>(null)
   const [showSettings, setShowSettings] = useState(false)
 
-  const { messages, agentState, streamingText, connected, toolCalls, sendMessage, abort } =
-    useAgent()
+  const {
+    messages,
+    agentState,
+    streamingText,
+    connected,
+    toolCalls,
+    pendingPermission,
+    sendMessage,
+    abort,
+    respondPermission,
+  } = useAgent()
   const viewportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -156,6 +166,9 @@ function App() {
         onOpenChange={setShowSettings}
         onSaved={handleConfigSaved}
       />
+
+      {/* 权限确认弹窗 */}
+      <PermissionDialog request={pendingPermission} onRespond={respondPermission} />
     </div>
   )
 }

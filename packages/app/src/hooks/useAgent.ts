@@ -1,4 +1,4 @@
-import type { AgentState, Message } from '@the-next/core'
+import type { AgentState, Message, RiskLevel } from '@the-next/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { discoverServer, getWsUrl, resetDiscovery } from '@/lib/server'
 
@@ -9,6 +9,13 @@ type ToolCallInfo = {
   result?: unknown
   status: 'calling' | 'done' | 'error'
   error?: string
+}
+
+export type PermissionRequest = {
+  permissionId: string
+  toolName: string
+  args: Record<string, unknown>
+  riskLevel: RiskLevel
 }
 
 type ServerMessage = {
@@ -23,6 +30,7 @@ type ServerMessage = {
       | 'tool_call'
       | 'tool_result'
       | 'tool_error'
+      | 'permission_request'
     state?: AgentState
     delta?: string
     message?: Message
@@ -31,6 +39,8 @@ type ServerMessage = {
     toolName?: string
     args?: Record<string, unknown>
     result?: unknown
+    permissionId?: string
+    riskLevel?: RiskLevel
   }
   error?: string
 }
@@ -41,6 +51,7 @@ export function useAgent() {
   const [streamingText, setStreamingText] = useState('')
   const [connected, setConnected] = useState(false)
   const [toolCalls, setToolCalls] = useState<ToolCallInfo[]>([])
+  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const requestIdRef = useRef<string | null>(null)
@@ -144,6 +155,19 @@ export function useAgent() {
                       : tc,
                   ),
                 )
+              }
+              break
+            }
+
+            case 'permission_request': {
+              const pId = event.permissionId
+              if (pId && event.toolName && event.riskLevel) {
+                setPendingPermission({
+                  permissionId: pId,
+                  toolName: event.toolName,
+                  args: event.args ?? {},
+                  riskLevel: event.riskLevel,
+                })
               }
               break
             }
@@ -259,13 +283,22 @@ export function useAgent() {
     setStreamingText('')
   }, [])
 
+  const respondPermission = useCallback((permissionId: string, approved: boolean) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'permission_response', permissionId, approved }))
+    }
+    setPendingPermission(null)
+  }, [])
+
   return {
     messages,
     agentState,
     streamingText,
     connected,
     toolCalls,
+    pendingPermission,
     sendMessage,
     abort,
+    respondPermission,
   }
 }

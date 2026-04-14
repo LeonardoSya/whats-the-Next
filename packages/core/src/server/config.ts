@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentConfig } from '..'
+import type { AgentConfig } from '../types/config'
 import { ensureDir } from './utils'
 
 // 未来以类似openclaw的文件存储方式管理配置

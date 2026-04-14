@@ -1,4 +1,4 @@
-import type { Message } from "..";
+import type { Message } from '..'
 
 export const toSDKMessages = (
   messages: readonly Message[],

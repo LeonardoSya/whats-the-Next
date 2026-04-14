@@ -1,5 +1,6 @@
 // agent事件
 
+import type { RiskLevel } from '../tools/types'
 import type { AgentState, AssistantMessage } from './message'
 
 /**
@@ -28,6 +29,7 @@ export type AgentEvent =
   | ToolCallEvent
   | ToolResultEvent
   | ToolErrorEvent
+  | PermissionRequestEvent
 
 /**
  * 状态变更事件。
@@ -106,4 +108,18 @@ export type ToolErrorEvent = {
   readonly toolCallId: string
   readonly toolName: string
   readonly error: string
+}
+
+/**
+ * 权限请求事件。
+ *
+ * 工具执行前如果需要用户确认（dangerous 级别），
+ * 产出此事件暂停执行，等待前端回复 permission_response。
+ */
+export type PermissionRequestEvent = {
+  readonly type: 'permission_request'
+  readonly permissionId: string
+  readonly toolName: string
+  readonly args: Record<string, unknown>
+  readonly riskLevel: RiskLevel
 }
