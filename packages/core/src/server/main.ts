@@ -4,6 +4,7 @@
 import type { ServerWebSocket } from 'bun'
 import type { AgentContext } from '../agent/context'
 import { runAgent } from '../agent/loop'
+import { applySandbox, type SandboxConfig } from '../sandbox/manager'
 import type { ApprovalCallback } from '../tools/permission'
 import { getDefaultTools } from '../tools/registry'
 import { toSDKTools } from '../tools/types'
@@ -115,6 +116,13 @@ const handleChat = async (
 
   const approve = createApprovalCallback(ws, id)
 
+  const sandbox: SandboxConfig = {
+    enabled: true,
+    workingDirectory: process.cwd(),
+  }
+
+  const tools = applySandbox(getDefaultTools(), sandbox)
+
   const agentContext: AgentContext = {
     config: {
       model: config.model,
@@ -124,7 +132,8 @@ const handleChat = async (
       maxTokens: config.maxTokens,
     },
     messages: messages.messages,
-    tools: toSDKTools(getDefaultTools(), approve),
+    tools: toSDKTools(tools, approve),
+    sandbox,
   }
 
   try {

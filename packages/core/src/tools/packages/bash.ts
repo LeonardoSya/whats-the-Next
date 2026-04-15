@@ -90,6 +90,16 @@ const truncateOutput = (text: string): string => {
   return `${kept}\n\n[output truncated — ${removed} characters removed]`
 }
 
+/**
+ * bash 工具的 spawn 参数构建器。
+ * 默认返回 ['bash', '-c', cmd]，外层可通过 sandbox wrapper 替换。
+ */
+export function buildDefaultSpawnArgs(command: string): string[] {
+  return ['bash', '-c', command]
+}
+
+export const bashParameters = parameters
+
 export const bashTool: ToolDefinition<typeof parameters> = {
   name: 'bash',
   description:
@@ -99,7 +109,7 @@ export const bashTool: ToolDefinition<typeof parameters> = {
   async execute({ command, timeout }) {
     const timeoutMs = Math.min(timeout ?? DEFAULT_TIMEOUT, MAX_TIMEOUT)
 
-    const proc = Bun.spawn(['bash', '-c', command], {
+    const proc = Bun.spawn(buildDefaultSpawnArgs(command), {
       stdout: 'pipe',
       stderr: 'pipe',
       env: { ...process.env },
