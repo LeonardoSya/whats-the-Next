@@ -16,12 +16,27 @@ function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
 
-  const { tasks, connected, loading, createTask, runTask, deleteTask, fetchMessages, refreshTask } =
-    useTasks()
+  const {
+    tasks,
+    connected,
+    loading,
+    createTask,
+    runTask,
+    deleteTask,
+    fetchMessages,
+    refreshTask,
+    runtimes,
+    getRuntime,
+  } = useTasks()
 
   const selectedTask = useMemo(
     () => tasks.find((t) => t.id === selectedTaskId) ?? null,
     [tasks, selectedTaskId],
+  )
+
+  const selectedRuntime = useMemo(
+    () => (selectedTaskId ? getRuntime(selectedTaskId) : null),
+    [selectedTaskId, getRuntime],
   )
 
   const handleAdd = useCallback(
@@ -57,6 +72,7 @@ function App() {
       {/* Sidebar */}
       <TaskListSidebar
         tasks={tasks}
+        runtimes={runtimes}
         selectedId={selectedTaskId}
         onSelect={setSelectedTaskId}
         onAdd={handleAdd}
@@ -68,9 +84,10 @@ function App() {
 
       {/* Main content */}
       <main className="flex-1 min-w-0">
-        {selectedTask ? (
+        {selectedTask && selectedRuntime ? (
           <TaskDetailView
             task={selectedTask}
+            runtime={selectedRuntime}
             onRun={runTask}
             onRefresh={refreshTask}
             fetchMessages={fetchMessages}

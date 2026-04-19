@@ -6,10 +6,10 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "cd packages/app && bun run tauri dev",
-    "dev:servers": "bun run dev:core & bun run dev:app",
+    "kill:server": "pkill -9 -f 'the-next/packages/core/src/server/main.ts' 2>/dev/null; true",
+    "//dev": "本地开发需分别启动 dev:core 和 dev:app",
     "dev:core": "cd packages/core && bun --hot src/server/main.ts",
-    "dev:app": "cd packages/app && vite",
+    "dev:app": "cd packages/app && bun run tauri dev",
     "build:core": "cd packages/core && bun build src/server/main.ts --compile --outfile ../app/src-tauri/binaries/the-next-core-aarch64-apple-darwin",
     "build:all": "bun run build:core && cd packages/app && tsc && vite build",
     "build": "cd packages/app && bun run tauri build",

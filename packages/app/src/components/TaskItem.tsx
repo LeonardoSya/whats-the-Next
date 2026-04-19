@@ -1,5 +1,6 @@
 import type { Task } from '@the-next/core'
-import { Circle, CircleCheck, Loader2, Play, Trash2 } from 'lucide-react'
+import { Circle, CircleCheck, Layers, Loader2, Play, Trash2, Wrench } from 'lucide-react'
+import type { TaskRuntimeState } from '@/hooks/useTaskRuntime'
 import { cx } from '@/lib/utils'
 import { TaskTypeBadge } from './TaskTypeBadge'
 
@@ -9,6 +10,8 @@ type TaskItemProps = {
   readonly onSelect: (id: string) => void
   readonly onRun: (id: string) => void
   readonly onDelete: (id: string) => void
+  /** 该任务的实时运行时状态(可选,运行中显示进度) */
+  readonly runtime?: TaskRuntimeState
 }
 
 function StatusIcon({ status }: { status: Task['status'] }) {
@@ -32,9 +35,13 @@ function formatTime(ts: number): string {
   return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }
 
-export function TaskItem({ task, selected, onSelect, onRun, onDelete }: TaskItemProps) {
+export function TaskItem({ task, selected, onSelect, onRun, onDelete, runtime }: TaskItemProps) {
   const canRun =
     task.status === 'pending' || task.status === 'failed' || task.status === 'scheduled'
+  const isRunning = task.status === 'running'
+
+  // 运行中且有 runtime 数据,展示进度;静态 task 显示创建时间
+  const showProgress = isRunning && runtime && (runtime.turnCount > 0 || runtime.toolCalls.length > 0)
 
   return (
     <button
@@ -58,9 +65,25 @@ export function TaskItem({ task, selected, onSelect, onRun, onDelete }: TaskItem
         >
           {task.title}
         </p>
-        <div className="mt-1 flex items-center gap-2">
+        <div className="mt-1 flex items-center gap-2 flex-wrap">
           <TaskTypeBadge taskType={task.taskType} />
-          <span className="text-[10px] text-muted-foreground">{formatTime(task.createdAt)}</span>
+
+          {showProgress ? (
+            <>
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600">
+                <Layers className="size-3" />
+                Turn {runtime.turnCount}
+              </span>
+              {runtime.toolCalls.length > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600">
+                  <Wrench className="size-3" />
+                  {runtime.toolCalls.length}
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="text-[10px] text-muted-foreground">{formatTime(task.createdAt)}</span>
+          )}
         </div>
       </div>
 

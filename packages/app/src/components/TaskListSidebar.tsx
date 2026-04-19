@@ -1,6 +1,7 @@
 import type { Task, TaskStatus } from '@the-next/core'
 import { CheckCircle2, Clock, ListTodo, Settings } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import type { TaskRuntimeState } from '@/hooks/useTaskRuntime'
 import { cx } from '@/lib/utils'
 import { QuickAdd } from './QuickAdd'
 import { TaskItem } from './TaskItem'
@@ -18,6 +19,8 @@ const ACTIVE_STATUSES: TaskStatus[] = ['pending', 'scheduled', 'running', 'faile
 
 type TaskListSidebarProps = {
   readonly tasks: Task[]
+  /** 所有任务的实时运行时状态(taskId → runtime) */
+  readonly runtimes: Record<string, TaskRuntimeState>
   readonly selectedId: string | null
   readonly onSelect: (id: string) => void
   readonly onAdd: (description: string) => void
@@ -29,6 +32,7 @@ type TaskListSidebarProps = {
 
 export function TaskListSidebar({
   tasks,
+  runtimes,
   selectedId,
   onSelect,
   onAdd,
@@ -118,6 +122,7 @@ export function TaskListSidebar({
             <TaskItem
               key={task.id}
               task={task}
+              runtime={runtimes[task.id]}
               selected={task.id === selectedId}
               onSelect={onSelect}
               onRun={onRun}

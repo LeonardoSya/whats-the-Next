@@ -1,12 +1,15 @@
 import type { Task } from '@the-next/core'
-import { Bug, Calendar, Clock, FileText, MessageSquare, Play, RotateCcw } from 'lucide-react'
+import { Activity, Bug, Calendar, Clock, FileText, MessageSquare, Play, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import type { TaskRuntimeState } from '@/hooks/useTaskRuntime'
 import { cx } from '@/lib/utils'
 import { TaskLogViewer } from './TaskLogViewer'
+import { TaskRuntimeBar } from './TaskRuntimeBar'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { TaskTypeBadge } from './TaskTypeBadge'
+import { TurnTimeline } from './TurnTimeline'
 
 type TaskMessage = {
   id: string
@@ -17,6 +20,7 @@ type TaskMessage = {
 
 type TaskDetailViewProps = {
   readonly task: Task
+  readonly runtime: TaskRuntimeState
   readonly onRun: (id: string) => void
   readonly onRefresh: (id: string) => Promise<Task>
   readonly fetchMessages: (id: string) => Promise<TaskMessage[]>
@@ -31,12 +35,21 @@ function formatDateTime(ts: number): string {
   })
 }
 
-type DetailTab = 'messages' | 'logs'
+type DetailTab = 'runtime' | 'messages' | 'logs'
 
-export function TaskDetailView({ task, onRun, onRefresh, fetchMessages }: TaskDetailViewProps) {
+export function TaskDetailView({
+  task,
+  runtime,
+  onRun,
+  onRefresh,
+  fetchMessages,
+}: TaskDetailViewProps) {
   const [messages, setMessages] = useState<TaskMessage[]>([])
   const [loadingMessages, setLoadingMessages] = useState(false)
-  const [activeTab, setActiveTab] = useState<DetailTab>('messages')
+  // 默认 tab:任务运行中或刚跑完(有 runtime 数据)优先看实况,否则看对话记录
+  const [activeTab, setActiveTab] = useState<DetailTab>(() =>
+    task.status === 'running' ? 'runtime' : 'messages',
+  )
 
   const canRun =
     task.status === 'pending' || task.status === 'failed' || task.status === 'scheduled'
@@ -57,6 +70,18 @@ export function TaskDetailView({ task, onRun, onRefresh, fetchMessages }: TaskDe
   useEffect(() => {
     loadMessages()
   }, [loadMessages])
+
+  // 任务从其他状态切到 running 时,自动跳到运行实况 tab
+  useEffect(() => {
+    if (isRunning) setActiveTab('runtime')
+  }, [isRunning])
+
+  // 任务执行完后,自动重新拉一次 messages(SQLite 里的对话记录已经写完整了)
+  useEffect(() => {
+    if (task.status === 'completed' || task.status === 'failed') {
+      loadMessages()
+    }
+  }, [task.status, loadMessages])
 
   return (
     <div className="flex h-full flex-col">
@@ -114,6 +139,9 @@ export function TaskDetailView({ task, onRun, onRefresh, fetchMessages }: TaskDe
         )}
       </div>
 
+      {/* Runtime bar:实时显示 turn / tool / token / streaming(运行中或有数据时) */}
+      <TaskRuntimeBar runtime={runtime} taskStatus={task.status} />
+
       {/* Result */}
       {task.result && (
         <div className="shrink-0 border-b border-border px-6 py-4">
@@ -148,6 +176,25 @@ export function TaskDetailView({ task, onRun, onRefresh, fetchMessages }: TaskDe
         <div className="shrink-0 flex items-center gap-1 border-b border-border px-6 py-0">
           <button
             type="button"
+            onClick={() => setActiveTab('runtime')}
+            className={cx(
+              'flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors',
+              activeTab === 'runtime'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Activity className="size-3.5" />
+            执行实况
+            {(runtime.turnCount > 0 || isRunning) && (
+              <span className="text-[10px] opacity-70">
+                ({runtime.turnCount}
+                {isRunning ? '+' : ''})
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('messages')}
             className={cx(
               'flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition-colors',
@@ -176,6 +223,9 @@ export function TaskDetailView({ task, onRun, onRefresh, fetchMessages }: TaskDe
             Workflow 日志
           </button>
         </div>
+
+        {/* Runtime tab */}
+        {activeTab === 'runtime' && <TurnTimeline runtime={runtime} />}
 
         {/* Messages tab */}
         {activeTab === 'messages' && (

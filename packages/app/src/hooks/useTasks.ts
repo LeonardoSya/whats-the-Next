@@ -1,6 +1,7 @@
 import type { Task, TaskEvent } from '@the-next/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { discoverServer, getHttpBase, getWsUrl, resetDiscovery } from '@/lib/server'
+import { useTaskRuntime } from './useTaskRuntime'
 
 type TaskMessage = {
   id: string
@@ -9,11 +10,28 @@ type TaskMessage = {
   timestamp: number
 }
 
+/**
+ * useTasks —— 任务列表 + WebSocket 桥接 + 运行时事件分发。
+ *
+ * 职责:
+ * 1. REST 拉取 / 创建 / 删除 / 触发执行
+ * 2. WS 接收 task_event,把 status 变更落到 tasks state,
+ *    把 agent 事件转发给 useTaskRuntime(让 UI 看到执行实况)
+ *
+ * useTaskRuntime 维护的 runtime 状态独立于 tasks 列表本身,
+ * 二者通过 taskId 关联,职责清晰。
+ */
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [connected, setConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const wsRef = useRef<WebSocket | null>(null)
+
+  const { runtimes, applyEvent, reset, getRuntime } = useTaskRuntime()
+
+  // 用 ref 持有 applyEvent,避免把它塞到 useEffect 依赖里导致 WS 重连
+  const applyEventRef = useRef(applyEvent)
+  applyEventRef.current = applyEvent
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -53,6 +71,11 @@ export function useTasks() {
 
         if (msg.type === 'task_event') {
           const event: TaskEvent = msg.event
+
+          // ── 1. 转发到运行时(无论事件类型,让 runtime 自己识别) ──
+          applyEventRef.current(event)
+
+          // ── 2. 处理 task 列表上的状态变更 ──
           if (event.type === 'task_status_changed') {
             setTasks((prev) =>
               prev.map((t) =>
@@ -121,16 +144,25 @@ export function useTasks() {
     [],
   )
 
-  const runTask = useCallback(async (taskId: string) => {
-    await discoverServer()
-    await fetch(`${getHttpBase()}/api/tasks/${taskId}/run`, { method: 'POST' })
-  }, [])
+  // 触发执行前先重置该任务的 runtime 状态,避免上一轮残留(toolCalls / turns)
+  const runTask = useCallback(
+    async (taskId: string) => {
+      reset(taskId)
+      await discoverServer()
+      await fetch(`${getHttpBase()}/api/tasks/${taskId}/run`, { method: 'POST' })
+    },
+    [reset],
+  )
 
-  const deleteTask = useCallback(async (taskId: string) => {
-    await discoverServer()
-    await fetch(`${getHttpBase()}/api/tasks/${taskId}`, { method: 'DELETE' })
-    setTasks((prev) => prev.filter((t) => t.id !== taskId))
-  }, [])
+  const deleteTask = useCallback(
+    async (taskId: string) => {
+      await discoverServer()
+      await fetch(`${getHttpBase()}/api/tasks/${taskId}`, { method: 'DELETE' })
+      setTasks((prev) => prev.filter((t) => t.id !== taskId))
+      reset(taskId)
+    },
+    [reset],
+  )
 
   const updateTask = useCallback(
     async (taskId: string, patch: Partial<Pick<Task, 'title' | 'status'>>) => {
@@ -170,5 +202,9 @@ export function useTasks() {
     updateTask,
     fetchMessages,
     refreshTask,
+    /** 所有任务的运行时状态 Map(taskId → runtime) */
+    runtimes,
+    /** 取单个任务的运行时(不存在则返回空 state) */
+    getRuntime,
   }
 }

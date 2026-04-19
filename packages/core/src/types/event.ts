@@ -5,31 +5,34 @@ import type { AgentState, AssistantMessage } from './message'
 
 /**
  * Agent 事件联合类型。
- *
- * Agent Loop（AsyncGenerator）产出的所有事件类型的联合。
- * 消费方通过 `event.type` 进行类型判别。
- *
- * @example
- * ```ts
- * for await (const event of runAgent(config, messages)) {
- *   switch (event.type) {
- *     case 'state_change':   // 更新状态指示器
- *     case 'text_delta':     // 追加流式文本
- *     case 'message_complete': // 保存完整消息
- *     case 'error':          // 显示错误
- *   }
- * }
- * ```
  */
 export type AgentEvent =
+  // agent 子状态切换:thinking → streaming → tool_calling → done/error
   | StateChangeEvent
+
+  // llm 流式输出文本中（用来模拟打字机效果）
   | TextDeltaEvent
+  
+  // llm 一段文本输出完毕
   | MessageCompleteEvent
+
+  // loop 发生不可恢复错误(LLM 调用失败 / 流消费异常等)
   | ErrorEvent
+
+  // llm 决定调用 tool
   | ToolCallEvent
+
+  // tool execute success, 携带返回结果
   | ToolResultEvent
+
+  // tool execute error, 携带错误信息(loop 不会因此终止)
   | ToolErrorEvent
+
+  // dangerous 级别工具执行前, 需用户手动审批请求, 等待前端 permission_response
   | PermissionRequestEvent
+
+  // 一轮 turn 完成, 携带本轮统计 + 状态机的 transition
+  | TurnCompleteEvent
 
 /**
  * 状态变更事件。
@@ -122,4 +125,19 @@ export type PermissionRequestEvent = {
   readonly toolName: string
   readonly args: Record<string, unknown>
   readonly riskLevel: RiskLevel
+}
+
+/**
+ * Turn 完成事件
+ */
+export type TurnCompleteEvent = {
+  readonly type: 'turn_complete'
+  readonly turnCount: number
+  readonly toolCallCount: number
+  readonly inputTokens: number
+  readonly outputTokens: number
+  // 本轮 LLM 输出的完整文本(可能为空字符串, 比如 LLM 直接调工具不说话的情况)
+  readonly assistantText: string
+  readonly durationMs: number
+  readonly transition: 'next_turn' | 'done' | 'aborted' | 'error'
 }

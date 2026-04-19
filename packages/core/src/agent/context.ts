@@ -1,5 +1,4 @@
 import type { ToolSet } from 'ai'
-import type { SandboxConfig } from '../sandbox/manager'
 import type { AgentConfig } from '../types/config'
 import type { Message } from '../types/message'
 
@@ -11,8 +10,9 @@ import type { Message } from '../types/message'
  * loop 只消费最终可用的 tools。
  */
 export type AgentContext = {
+  readonly taskId?: string
   readonly config: AgentConfig
   readonly messages: readonly Message[]
   readonly tools?: ToolSet
-  readonly sandbox?: SandboxConfig
+  readonly abort?: AbortController
 }
