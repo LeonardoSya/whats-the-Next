@@ -6,13 +6,13 @@
  */
 
 import type { ServerWebSocket } from 'bun'
-import type { AgentContext } from '../agent/context'
 import { runAgent } from '../agent/loop'
 import { SandboxManager, type TheNextSandboxConfig } from '../sandbox/manager'
 import type { ApprovalCallback } from '../tools/permission'
 import { getDefaultTools } from '../tools/registry'
 import { toSDKTools } from '../tools/types'
 import type { AgentConfig } from '../types/config'
+import type { AgentContext } from '../types/context'
 import { loadConfig, saveConfig } from './config'
 import type { ClientMessage, ServerMessage } from './protocol'
 import { jsonResponse, maskApiKey } from './utils'

@@ -1,6 +1,6 @@
 import type { ToolSet } from 'ai'
-import type { AgentConfig } from '../types/config'
-import type { Message } from '../types/message'
+import type { AgentConfig } from './config'
+import type { Message } from './message'
 
 /**
  * Agent 运行时上下文，作为 runAgent 的唯一入参。

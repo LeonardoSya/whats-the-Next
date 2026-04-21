@@ -1,10 +1,10 @@
 import { type ModelMessage, stepCountIs, streamText } from 'ai'
 
 import { createMiniMaxModel } from '../llm/client'
+import type { AgentContext } from '../types/context'
 import type { AgentEvent } from '../types/event'
-import { createAssistantMessage } from '../types/message'
-import type { AgentContext } from './context'
-import type { AgentLoopState, Transition } from './state'
+import { createAssistantMessage, toModelMessages } from '../types/message'
+import type { AgentLoopState, Transition } from '../types/state'
 
 const MAX_TURNS = 10
 
@@ -26,14 +26,9 @@ const EMPTY_TURN_METRICS = {
 export async function* runAgent(ctx: AgentContext): AsyncGenerator<AgentEvent> {
   const { messages, abort, config } = ctx
 
-  // 初始化状态机:把外部 Message 投影成 SDK 的 ModelMessage
+  // 初始化状态机
   let state: AgentLoopState = {
-    messages: messages.flatMap((m): ModelMessage[] => {
-      if (m.type === 'user') return [{ role: 'user', content: m.content }]
-      if (m.type === 'assistant') return [{ role: 'assistant', content: m.content }]
-      if (m.type === 'system') return [{ role: 'system', content: m.content }]
-      return []
-    }),
+    messages: toModelMessages(messages),
     turnCount: 0,
     totalInputTokens: 0,
     totalOutputTokens: 0,

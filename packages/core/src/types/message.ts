@@ -1,4 +1,6 @@
-// agent状态机
+// agent状态机 + 对话消息类型
+
+import type { ModelMessage } from 'ai'
 
 /**
  * agent运行时状态
@@ -14,12 +16,19 @@
  */
 export type AgentState = 'idle' | 'thinking' | 'streaming' | 'tool_calling' | 'error' | 'done'
 
-export type Message =
-  | UserMessage
-  | AssistantMessage
-  | SystemMessage
-  | ToolCallMessage
-  | ToolResultMessage
+/**
+ * 对话消息类型(自家协议,跟前端 UI 一起使用)。
+ *
+ * 只含三种"用户可感知"的消息:user / assistant / system。
+ * 工具调用/结果属于 LLM 内部产物,走 AgentEvent 流(ToolCallEvent / ToolResultEvent)
+ * 实时推给前端,不落在 Message 数组里。
+ *
+ * 跟 AI SDK 的 ModelMessage 的关系:
+ * - Message 带 id(React key) + timestamp(排序),方便 UI
+ * - ModelMessage 是 SDK 协议,content 可为 TextPart[]/ToolCallPart[]/ToolResultPart[]
+ * - 边界转换见 toModelMessages()
+ */
+export type Message = UserMessage | AssistantMessage | SystemMessage
 
 /**
  * 用户消息
@@ -56,34 +65,6 @@ export type SystemMessage = {
 }
 
 /**
- * 工具调用消息
- *
- * LLM 决定调用某个工具时产生，记录工具名和参数
- */
-export type ToolCallMessage = {
-  readonly type: 'tool_call'
-  readonly id: string
-  readonly toolCallId: string
-  readonly toolName: string
-  readonly args: Record<string, unknown>
-  readonly timestamp: number
-}
-
-/**
- * 工具结果消息
- *
- * 工具执行完成后产生，记录执行结果
- */
-export type ToolResultMessage = {
-  readonly type: 'tool_result'
-  readonly id: string
-  readonly toolCallId: string
-  readonly toolName: string
-  readonly result: unknown
-  readonly timestamp: number
-}
-
-/**
  * 创建用户消息
  */
 export const createUserMessage = (content: string): UserMessage => ({
@@ -115,28 +96,5 @@ export const createSystemMessage = (content: string): SystemMessage => ({
   timestamp: Date.now(),
 })
 
-export const createToolCallMessage = (
-  toolCallId: string,
-  toolName: string,
-  args: Record<string, unknown>,
-): ToolCallMessage => ({
-  type: 'tool_call',
-  id: crypto.randomUUID(),
-  toolCallId,
-  toolName,
-  args,
-  timestamp: Date.now(),
-})
-
-export const createToolResultMessage = (
-  toolCallId: string,
-  toolName: string,
-  result: unknown,
-): ToolResultMessage => ({
-  type: 'tool_result',
-  id: crypto.randomUUID(),
-  toolCallId,
-  toolName,
-  result,
-  timestamp: Date.now(),
-})
+export const toModelMessages = (messages: readonly Message[]): ModelMessage[] =>
+  messages.map((m) => ({ role: m.type, content: m.content }))
