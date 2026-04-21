@@ -1,50 +1,40 @@
 # @the-next/core
 
-> 学习 Claude Code 设计模式的 task-driven agent 内核。
-> 区别于"对话轮驱动"的 chat agent，这里的一等公民是 **Task**：
-> 每个用户输入都被装配成一个可调度、可持久化、可背景执行、可观测的执行单元。
+> 学习 Claude Code 设计模式的单轮对话 agent 内核 + 内置工具集 + bun ws server 桥接前端。
+>
+> 这一层只做"agent runtime"和"前端桥接"两件事，**不做任何业务封装**（不做 task / 不做调度 / 不做持久化）。
+> 业务侧能力请在外层另起包，core 只暴露最小但完备的 agent 能力面。
 
 ---
 
 ## 1. 整体心智模型
 
 ```
-┌────────────── User Input ──────────────┐
-│                                        │
-│  REST POST /api/tasks                  │
-│       │                                │
-│       ▼                                │
-│  TaskRouter ─► TaskType + Title        │  ← 规则优先 / LLM fallback
-│       │                                │
-│       ▼                                │
-│  ToolKit Registry ─► Tools + Addons    │  ← TaskType → ToolKit 正向映射
-│       │                                │
-│       ▼                                │
-│  TaskStore.create() (sqlite)           │
-│       │                                │
-│       ▼                                │
-│  TaskScheduler   ─或─  POST /run       │
-│       │                                │
-│       ▼                                │
-│  executeTask() ──► runAgent()          │  ← 真正的 agent 状态机
-│       │                │               │
-│       │       ┌────────┴────────┐      │
-│       │       │ AgentLoopState  │      │  ← while 循环 + 显式 transition
-│       │       │ ・stepCountIs(1)│      │
-│       │       │ ・每轮 LLM+tool │      │
-│       │       └────────┬────────┘      │
-│       │                │               │
-│       ▼                ▼               │
-│  TaskLogger     AgentEvent stream      │
-│  (JSONL)              │                │
-│                       ▼                │
-│              WebSocket broadcast       │
-└────────────────────────────────────────┘
+┌──────────── Frontend (packages/app) ────────────┐
+│                                                  │
+│   useAgent ──ws.send {type:'chat'}──► Server     │
+│      ▲                                  │       │
+│      │ ws.message {type:'event'}        │       │
+│      └─────────────────────┐            ▼       │
+│                            │      handleChat()  │
+│                            │            │       │
+│                            │            ▼       │
+│                            │      AgentContext  │
+│                            │            │       │
+│                            │            ▼       │
+│                            └────  runAgent(ctx) ◄─── ★ 内核
+│                                         │       │
+│                                  AgentEvent yield
+└──────────────────────────────────────────────────┘
 ```
 
-两个核心判断（来自 Claude Code 的设计观）：
-- **Agent Loop 是状态机，不是函数**：连续运行的复杂度（context 治理、失败恢复、工具回灌）必须显式化为 runtime 状态。
-- **执行内核应该统一**：chat 与 task 不应该是两条并行流水线。当前 `handleChat` 与 `executeTask` 仍是对称重写，是 P1 的整合目标。
+两条心智线：
+
+1. **agent runtime**：`runAgent(ctx)` 是状态机，输入 `AgentContext`，输出 `AsyncGenerator<AgentEvent>`。
+   它对"是谁在调用"完全无感知 —— 没有 task / 没有 session / 没有持久化。
+
+2. **server 桥接**：`server/main.ts` 唯一职责就是把 `runAgent` 的事件流通过 WebSocket 喂给前端，
+   把前端的 `chat` / `abort` / `permission_response` 消息翻译成对 runtime 的调用。
 
 ---
 
@@ -54,24 +44,15 @@
 src/
 ├── index.ts                  # 仅导出前端需要的 public types(白名单导出)
 │
-├── agent/                    # 推理内核 —— 唯一直接驱动 LLM 的层
+├── agent/                    # ★ 推理内核 —— 唯一直接驱动 LLM 的层
 │   ├── loop.ts               # runAgent 状态机骨架(while + 显式 transition)
 │   ├── state.ts              # AgentLoopState + Transition 联合类型
 │   └── context.ts            # AgentContext: runAgent 的唯一入参
 │
-├── task/                     # task-driven 引擎 —— 把"用户描述"变成"可执行单元"
-│   ├── model.ts              # Task / TaskType / TaskStatus / TaskEvent
-│   ├── router.ts             # 自然语言 → TaskType + Title(规则 + LLM 两路)
-│   ├── toolkit.ts            # ToolKit 注册表(TaskType → Tools + system addon)
-│   ├── executor.ts           # executeTask: 装配 ctx → 跑 loop → 持久化 + 日志
-│   ├── store.ts              # bun:sqlite 持久化 tasks + task_messages
-│   ├── scheduler.ts          # cron / runAt 后台调度器
-│   └── logger.ts             # JSONL 结构化日志(每个 task 一个 .jsonl)
-│
 ├── tools/                    # 工具系统 —— 内核外部最重要的扩展面
 │   ├── types.ts              # ToolDefinition / RiskLevel / toSDKTools()
 │   ├── permission.ts         # withPermissionGate(危险工具的审批门控)
-│   ├── registry.ts           # 默认工具集(给 chat 模式用)
+│   ├── registry.ts           # 默认工具集(getDefaultTools)
 │   └── packages/             # 具体工具实现(bash / file_* / grep / docx_* / xlsx_* / pdf_*)
 │
 ├── sandbox/                  # @anthropic-ai/sandbox-runtime 适配层
@@ -79,7 +60,7 @@ src/
 │   └── config.ts             # the-next 配置 → SandboxRuntimeConfig 的翻译
 │
 ├── server/                   # bun ws server —— 唯一对外接口
-│   ├── main.ts               # Bun.serve: REST(任务 CRUD) + WS(chat + task event)
+│   ├── main.ts               # Bun.serve: REST(config) + WS(chat / abort / permission)
 │   ├── protocol.ts           # ClientMessage / ServerMessage WS 协议
 │   ├── config.ts             # AgentConfig 持久化(~/.the-next/config.json)
 │   └── utils.ts              # http 工具(json/CORS/maskApiKey)
@@ -96,10 +77,10 @@ src/
 **依赖方向铁律（不许逆向引用）**：
 
 ```
-types  ◄─  llm/sandbox/tools  ◄─  agent  ◄─  task  ◄─  server
+types  ◄─  llm/sandbox/tools  ◄─  agent  ◄─  server
 ```
 
-`types/` 是叶子，不能 import 任何业务模块。`agent/` 不能反过来 import `task/` 或 `server/`。
+`types/` 是叶子，不能 import 任何业务模块。`agent/` 不能反过来 import `server/`。
 `tools/types.ts` 中 `RiskLevel` 是 `tools` 自己的概念，但被 `index.ts` re-export 给前端用。
 
 ---
@@ -164,84 +145,20 @@ state_change:thinking
 
 ---
 
-## 4. Task 引擎 —— 把 agent 做成"可调度的执行单元"
+## 4. AgentContext —— 唯一入参
 
-### Task 生命周期
-
-```
-pending ──► running ──► completed
-   │                       │
-   │                       ▼
-   ├──► scheduled ──► running ──► failed
-   │                       │
-   ├──► (DELETE) ──► gone  └──► cancelled
-```
-
-- `pending`：刚 POST，未执行。
-- `scheduled`：附带 `schedule.runAt` 或 `schedule.cron`，由 `TaskScheduler` 持有 timer。
-- `running`：`executeTask` 正在驱动 `runAgent`。
-- `completed` / `failed`：`result.summary` 或 `result.error` 已写入。
-- `cancelled`：用户主动取消（当前未实装完整路径）。
-
-### TaskRouter（双路分类）
-
-`task/router.ts` 走两层：
-
-1. **规则路径** `routeTask()`：纯正则匹配，0 token，0 延迟，必定有兜底（`general`）。
-2. **LLM 路径** `routeTaskAsync()`：规则没命中时，用 `generateObject` + zod schema 让 LLM 强类型分类。LLM 失败时仍返回 `general`，永不抛错。
-
-写新 TaskType 时：先扩 `TaskType` 联合 → 在 `RULES` 加正则 → 在 `classifyWithLLM` 的 prompt 加描述 → 在 `toolkit.ts` 加 `ToolKit` 配 `taskTypes`。
-
-### ToolKit 注册表
-
-`task/toolkit.ts` 是 task 模式下"能力面装配"的当前实现：
-
-```
-TaskType ──filter──► ToolKit[] ──merge──► ToolDefinition[]
-                          │
-                          └──collect──► systemPromptAddon
+```ts
+type AgentContext = {
+  readonly taskId?: string                  // 仅用于日志关联,不参与 runtime 决策
+  readonly config: AgentConfig
+  readonly messages: readonly Message[]
+  readonly tools?: ToolSet
+  readonly abort?: AbortController
+}
 ```
 
-**与 Claude Code 的差异**：Claude Code 用 `resolveAgentTools` 黑白名单负向过滤，我们用 `taskTypes: TaskType[]` 正向声明，工具编排对用户透明（每个 ToolKit 自己声明它服务哪些 TaskType）。
-
-**演进方向**：见 `todo.md` P3-#3，要把"创建时一次性算"改成"每轮 turn 重算"，
-为热接入 MCP 工具、长 task 中途注入 skill 铺路。
-
-### TaskExecutor
-
-`task/executor.ts` 是 task 模式与 agent loop 的桥：
-
-- 输入：`Task` + `AgentConfig` + `TaskStore`
-- 副作用：
-  - 入 sqlite（status、message、result）
-  - 写 JSONL 日志（每个阶段计时 + 结构化数据）
-  - 透传 AgentEvent 到 server，server 再 broadcast
-- 输出：`AsyncGenerator<TaskEvent>`
-
-**改这里时**：
-- 新增"执行阶段"先在 `TaskLogger.startTimer/endTimer` 包一对，方便后期分析性能。
-- 不要在 `case 'tool_result'` 加 `if (toolName === 'bash')` 之类的特判（违反工具封装），
-  应该在 `runAgent` 里加"回灌前 hook"（todo P0-#4）。
-
-### TaskStore
-
-`bun:sqlite` 两张表：`tasks` + `task_messages`，外键级联删除。
-WAL 模式 + 启动时跑 MIGRATIONS 数组（幂等的 `CREATE TABLE IF NOT EXISTS`）。
-加列时**追加**到 MIGRATIONS 末尾，不要改老的语句。
-
-### TaskScheduler
-
-最小可用 cron 解析器（`minute hour dom mon dow`，只支持 `*` 和数字）。
-启动时从 store 加载所有 `scheduled` 任务重建 timer。
-`onTrigger` 是注入回调（当前由 `server/main.ts` 注入 `runTaskInBackground`），
-保持 `scheduler` 自身对 `executor` 0 依赖。
-
-### TaskLogger
-
-写 `~/.the-next/logs/{taskId}.jsonl`，每条 JSON 一行，append-only。
-`LogPhase` 是固定枚举（`route` / `toolkit` / `execute` / `agent_loop` / `tool_call` / ...），
-新增阶段前先扩 `LogPhase` 联合。
-所有写操作 best-effort（`try/catch` 吞掉），**永远不要让 logging 阻塞主流程**。
+`runAgent(ctx)` 不持有任何全局状态，所有依赖都从 `ctx` 拿。
+要给 agent 传新东西（如 turn-scoped 能力面、stop hook、memory），**先扩 `AgentContext`**。
 
 ---
 
@@ -272,6 +189,20 @@ type ToolDefinition<TInput = z.ZodTypeAny> = {
 
 `bash` 工具的 `riskLevel` 是函数：`classifyBashRisk` 拆 pipeline 第一段命令做匹配。
 扩展危险模式时改 `bash.ts:DANGEROUS_PATTERNS`。
+
+### 内置工具
+
+`tools/registry.ts:getDefaultTools()` 返回的全集（chat 模式默认全开放）：
+
+| 工具 | 风险 | 用途 |
+|------|------|------|
+| `file_read` | safe | 读文件,带行号,支持 offset/limit 分块 |
+| `file_write` | write | 写文件,自动建父目录 |
+| `grep` | safe | 正则搜索,优先 ripgrep,fallback 到 grep |
+| `bash` | 函数 | 执行 shell,sandbox 包装,危险命令需审批 |
+
+就这 4 个 —— 最小但完备的 agent 工具集(文件读写 + 搜索 + shell)。
+对 OS 交互足够,对 office 文档处理不足(需要的话自己写 docx/xlsx/pdf 工具放进 `tools/packages/` 并注册)。
 
 ### Sandbox 协作
 
@@ -309,9 +240,7 @@ export const yourTool: ToolDefinition<typeof parameters> = {
 }
 ```
 
-注册：
-- 给 chat 用 → 加到 `tools/registry.ts:builtinTools`
-- 给 task 用 → 加到 `task/toolkit.ts` 某个 `ToolKit.tools`
+注册：在 `tools/registry.ts:builtinTools` 数组里加上即可。
 
 ---
 
@@ -333,23 +262,19 @@ export const yourTool: ToolDefinition<typeof parameters> = {
 
 `AgentState`：`idle | thinking | streaming | tool_calling | error | done`
 
-### TaskEvent —— task 维度的包装
-
-```ts
-type TaskEvent =
-  | { type: 'task_status_changed', taskId, status }
-  | { type: 'task_agent_event', taskId, event: AgentEvent }
-  | { type: 'task_result', taskId, result }
-```
-
 ### Server WS 协议
 
 ```ts
-type ClientMessage = ChatRequest | AbortRequest | PermissionResponse | TaskRunRequest
-type ServerMessage = EventMessage | TaskEventMessage | ReadyMessage | ErrorMessage
+type ClientMessage = ChatRequest | AbortRequest | PermissionResponse
+type ServerMessage = EventMessage | ReadyMessage | ErrorMessage
 ```
 
-**当前痛点（todo P1-#5）**：`AgentEvent` 与 `TaskEvent` 是两条并行流，前端 `useAgent` 与 `useTasks` 各自维护一份连接和 reducer。要演进成统一的 `ControlPlaneEvent`。
+- `ChatRequest{ id, messages }`：发起一次对话，server 用 `id` 路由后续 event 单播回去。
+- `AbortRequest{ id }`：中止该 id 对应的对话。
+- `PermissionResponse{ permissionId, approved }`：响应 dangerous 工具的审批请求。
+- `EventMessage{ id, event }`：单条 AgentEvent（按 `id` 单播）。
+- `ReadyMessage`：连接建立后第一条，告知前端 server 就绪。
+- `ErrorMessage{ id, error }`：处理失败的兜底响应。
 
 ---
 
@@ -363,26 +288,18 @@ type ServerMessage = EventMessage | TaskEventMessage | ReadyMessage | ErrorMessa
 |------|------|------|
 | `/api/config` | GET/POST | AgentConfig 读写（apiKey 返回时 mask） |
 | `/api/config/full` | GET | 完整配置（含明文 key，仅本机用） |
-| `/api/tasks` | POST | 创建 task（异步 router → toolkit → store → schedule） |
-| `/api/tasks` | GET | 列表，支持 `?status=&type=` |
-| `/api/tasks/:id` | GET/PATCH/DELETE | 单任务 CRUD |
-| `/api/tasks/:id/messages` | GET | 任务的对话历史 |
-| `/api/tasks/:id/run` | POST | 手动触发执行 |
-| `/api/tasks/:id/logs` | GET | JSONL 日志，支持 `?level=&phase=&limit=&offset=` |
-| `/api/logs/dir` | GET | 日志目录路径（调试用） |
+| `/` | GET | 健康检查 + 版本号（前端 `discoverServer` 探测用） |
 
 ### WS 端点
 
-`/ws` 一条连接，**广播所有 task_event 给所有连接客户端**（多 tab 实时同步）。
-chat 模式的 event 仍按 `id` 单播（避免串台）。
+`/ws` 一条连接，按 `id` **单播**（不广播），避免多 tab 串台。
 
 ### 启动流程
 
 ```
 startServer()
   ├─ SandboxManager.init(config)        # 失败不抛,降级跑
-  ├─ Bun.serve({ ... })                 # 自动找 3001-3010 可用端口
-  └─ taskScheduler.init()               # 重建 scheduled 任务的 timer
+  └─ Bun.serve({ ... })                 # 自动找 3001-3010 可用端口
 ```
 
 ---
@@ -404,21 +321,17 @@ startServer()
 
 ---
 
-## 9. 当前演进阶段（P0 → P3）
+## 9. 已经砍掉的东西（避免重新长出来）
 
-阅读顺序参考 `the-next/todo.md`，本节只做**当前进度快照**：
+历史上 core 还包含 `task/` 一层（task model / router / toolkit / executor / store / scheduler / logger）
+和对应的 server REST/WS 端点。**这一坨已经全部移除**，原因是它属于业务壳，应该长在外层而不是 core 里。
 
-| 编号 | 项目 | 状态 |
-|------|------|------|
-| P0-#1 | Agent Loop 升格为状态机 | ✅ 已落地（`agent/state.ts` + `agent/loop.ts` 已重写） |
-| P0-#4 | 工具回灌做成显式 runtime 步骤 | ⏳ 当前仍依赖 SDK 自动回灌（虽然 `stepCountIs(1)` 已为此铺路） |
-| P1-#2 | 统一 chat 和 task 为同一执行内核 | ⏳ `handleChat` 与 `executeTask` 仍是对称重写 |
-| P1-#5 | 控制面统一事件协议 | ⏳ `AgentEvent` 与 `TaskEvent` 仍并列 |
-| P2 配套 | 简单 recovery（max output 截断续跑） | ⏳ 状态机已有 transition slot，handler 未加 |
-| P2-#6 | Background task 通知机制 | ⏳ |
-| P3-#3 | turn-scoped 能力面动态装配 | ⏳ |
+如果未来需要"task 化"的能力（持久化对话、定时任务、background 执行、按场景装配工具集等），
+**正确的姿势是另起一个 package（比如 `@the-next/task`）依赖 `@the-next/core`**，
+而不是把 task 重新塞回 core。这样 core 永远保持"agent runtime + 工具 + server"三件套的最小完备性。
 
-**改 core 时的优先级判断**：能用现有结构表达的就别改架构；要加新转移/事件/阶段先扩对应的联合类型；要做控制面相关的改动先看 P1-#5 的演进方向，避免增量修改后再被推翻。
+参考资料：原 task 层的设计动机和拆分思路在 git 历史里能找到（删除前的 `packages/core/src/task/*`），
+重做时建议沿用而不是发明新模型。
 
 ---
 
@@ -426,25 +339,23 @@ startServer()
 
 工作时必须遵守：
 
-1. **使用 Bun**：项目已统一 Bun 工具链。`bun:sqlite`、`Bun.file`、`Bun.spawn`、`Bun.$` 优先于 node 等价物。详见根目录 `CLAUDE.md`。
+1. **使用 Bun**：项目已统一 Bun 工具链。`Bun.file`、`Bun.spawn`、`Bun.$` 优先于 node 等价物。详见根目录 `CLAUDE.md`。
 
 2. **类型先于实现**：所有跨模块边界必须经过 `types/` 或本模块的 type 文件。新增 event 先扩 `types/event.ts:AgentEvent`，新增 transition 先扩 `agent/state.ts:Transition`。
 
-3. **不要在 loop 里写工具特判**：`if (toolName === 'bash')` 在 `executor.ts` 出现过一次（处理 sandboxViolations），那是 todo P0-#4 要清理的债。新代码里别再这么写。
+3. **不要在 loop 里写工具特判**：`if (toolName === 'xxx')` 这种逻辑不该出现在 `agent/loop.ts` 里。工具差异化处理由工具自己的 `execute` 完成，必要时往 ToolDefinition 加扩展字段。
 
 4. **不要 mutate state**：`AgentLoopState` 是 readonly，每次循环结束 `state = { ...new }`。
 
-5. **日志 best-effort**：`TaskLogger` 所有写操作必须 `try/catch` 吞错。**永远不要让 logging 阻塞主流程或抛错出来**。
+5. **public types 白名单**：`src/index.ts` 只导出前端真用得到的类型。**不要把内部实现细节（`AgentLoopState`、`Transition`、`ToolDefinition`、`SandboxManager` 等）暴露给前端**——它们演进时不需要考虑前端兼容性。
 
-6. **public types 白名单**：`src/index.ts` 只导出前端真用得到的类型。**不要把内部实现细节（`AgentLoopState`、`Transition`、`ToolDefinition`、`SandboxManager` 等）暴露给前端**——它们演进时不需要考虑前端兼容性。
+6. **Risk 默认 `write`**：新工具如果不写 `riskLevel`，会默认 `write`（自动放行但留有提升通道）。读类工具记得显式标 `safe`。
 
-7. **Risk 默认 `write`**：新工具如果不写 `riskLevel`，会默认 `write`（自动放行但留有提升通道）。读类工具记得显式标 `safe`。
+7. **Sandbox 不可用 ≠ 失败**：所有 sandbox 调用必须降级安全，跑不起来就当透明（用户已经被启动日志告知）。
 
-8. **Sandbox 不可用 ≠ 失败**：所有 sandbox 调用必须降级安全，跑不起来就当透明（用户已经被启动日志告知）。
+8. **不要在 core 里加业务壳**：core 不持有 sqlite、不写 JSONL、不调度 cron、不持久化对话。这些都属于"业务壳"，要做请另起包。
 
-9. **DB schema 加列只能 append**：往 `MIGRATIONS` 数组末尾追加新的 `ALTER TABLE` 或新表，不要改老的 `CREATE TABLE` 语句。
-
-10. **改完跑 lint**：`bun run lint`（biome）。这个项目对未使用 import / 类型隐式 any 是零容忍。
+9. **改完跑 lint**：`bun run lint`（biome）。这个项目对未使用 import / 类型隐式 any 是零容忍。
 
 ---
 
@@ -452,15 +363,11 @@ startServer()
 
 | 想做的事 | 改哪 |
 |----------|------|
-| 加新工具 | `tools/packages/<name>.ts` + `tools/registry.ts` 或 `task/toolkit.ts` |
-| 加新 TaskType | `task/model.ts:TaskType` + `task/router.ts:RULES` + `task/toolkit.ts` |
-| 加新 ToolKit | `task/toolkit.ts` 新增 `ToolKit` 对象 + 进 `registry` |
-| 加新 agent 事件 | `types/event.ts:AgentEvent` 联合 + `agent/loop.ts:yield` |
+| 加新工具 | `tools/packages/<name>.ts` + 进 `tools/registry.ts:builtinTools` |
+| 加新 agent 事件 | `types/event.ts:AgentEvent` 联合 + `agent/loop.ts:yield` + `useAgent` reducer |
 | 加新状态机 transition | `agent/state.ts:Transition` 联合 + `agent/loop.ts` 处理分支 |
 | 改 LLM provider | `llm/client.ts`（当前是 OpenAI compatible，可以扩多 provider 工厂） |
-| 加新日志阶段 | `task/logger.ts:LogPhase` 联合 |
 | 加新 REST 端点 | `server/main.ts:handleApiRequest` |
 | 加新 WS 消息类型 | `server/protocol.ts:ClientMessage/ServerMessage` |
 | 改 sandbox 策略 | `sandbox/config.ts:convertToRuntimeConfig` |
-
-不知道改哪时，先在 `todo.md` 找最相关的 P 编号，按那条的"改造范围"开工。
+| 给 ctx 加新字段（如 hooks / memory） | `agent/context.ts:AgentContext` 联合 |

@@ -1,7 +1,15 @@
 // @the-next/core — 仅暴露前端实际需要的公共类型
 
-export type { LogEntry, LogLevel, LogPhase } from './task/logger'
-export type { Task, TaskEvent, TaskResult, TaskSchedule, TaskStatus, TaskType } from './task/model'
+export type {
+  AbortRequest,
+  ChatRequest,
+  ClientMessage,
+  ErrorMessage,
+  EventMessage,
+  PermissionResponse,
+  ReadyMessage,
+  ServerMessage,
+} from './server/protocol'
 export type { RiskLevel } from './tools/types'
 export type {
   AgentEvent,

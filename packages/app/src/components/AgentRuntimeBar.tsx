@@ -2,17 +2,15 @@ import type { AgentState } from '@the-next/core'
 import { Activity, Layers, Loader2, MessageSquare, Wrench, Zap } from 'lucide-react'
 import { useMemo } from 'react'
 import {
+  type AgentRuntimeState,
   getActiveToolCalls,
   getStreamingText,
   getTotalToolCallCount,
-  type TaskRuntimeState,
-} from '@/hooks/useTaskRuntime'
+} from '@/hooks/useAgentRuntime'
 import { cx } from '@/lib/utils'
 
-type TaskRuntimeBarProps = {
-  readonly runtime: TaskRuntimeState
-  /** 任务自身的 status,用于决定是否显示"已停止"占位 */
-  readonly taskStatus: string
+type AgentRuntimeBarProps = {
+  readonly runtime: AgentRuntimeState
 }
 
 const AGENT_STATE_LABELS: Record<AgentState, { text: string; tone: 'active' | 'idle' | 'error' }> =
@@ -32,7 +30,7 @@ function formatTokens(n: number): string {
 }
 
 /**
- * TaskRuntimeBar —— 任务详情页的"运行时控制面"。
+ * AgentRuntimeBar —— 当前 session 的"运行时控制面"。
  *
  * 借鉴 Claude Code REPL 的核心思路:用户应该看到 agent 真的在做什么,
  * 而不只是看一个旋转图标。这里显式展示:
@@ -42,11 +40,10 @@ function formatTokens(n: number): string {
  * - 当前正在执行的工具调用列表
  * - 流式输出的文本(预览)
  *
- * 任务未启动 / 已结束时,这个面板会缩成一个"空闲"占位条,
- * 不打扰静态 task 的浏览体验。
+ * 没有运行时数据时这个面板会自动隐藏,不打扰空页面。
  */
-export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
-  const isRunning = taskStatus === 'running'
+export function AgentRuntimeBar({ runtime }: AgentRuntimeBarProps) {
+  const isRunning = !!runtime.currentTurn
 
   const activeToolCalls = useMemo(() => getActiveToolCalls(runtime), [runtime])
   const totalToolCallCount = useMemo(() => getTotalToolCallCount(runtime), [runtime])
@@ -55,7 +52,7 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
   const stateMeta = AGENT_STATE_LABELS[runtime.agentState]
   const totalTokens = runtime.totalInputTokens + runtime.totalOutputTokens
 
-  // 没有运行时数据 + 任务非 running:不显示这个 bar(避免打扰)
+  // 没有运行时数据时不显示这个 bar(避免空面板占位)
   if (!isRunning && runtime.turnCount === 0 && totalToolCallCount === 0 && !streamingText) {
     return null
   }
@@ -67,9 +64,7 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
         isRunning ? 'bg-primary/5' : 'bg-muted/30',
       )}
     >
-      {/* 第一行:agent 状态 + 关键指标 */}
       <div className="flex items-center gap-4 flex-wrap">
-        {/* 状态指示 */}
         <div className="flex items-center gap-2">
           <span
             className={cx(
@@ -93,35 +88,29 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
 
         <div className="h-4 w-px bg-border" />
 
-        {/* Turn 进度 */}
         <div
           className="flex items-center gap-1.5 text-xs text-muted-foreground"
           title="已完成 turn 数(LLM ↔ 工具 来回轮数)"
         >
           <Layers className="size-3.5" />
           <span>
-            <span className="font-mono font-semibold text-foreground">{runtime.turnCount}</span>{' '}
-            轮
+            <span className="font-mono font-semibold text-foreground">{runtime.turnCount}</span> 轮
           </span>
         </div>
 
-        {/* 工具调用累计 */}
         {totalToolCallCount > 0 && (
           <div
             className="flex items-center gap-1.5 text-xs text-muted-foreground"
-            title="本次执行已调用工具次数"
+            title="本次会话已调用工具次数"
           >
             <Wrench className="size-3.5" />
             <span>
-              <span className="font-mono font-semibold text-foreground">
-                {totalToolCallCount}
-              </span>{' '}
+              <span className="font-mono font-semibold text-foreground">{totalToolCallCount}</span>{' '}
               次工具
             </span>
           </div>
         )}
 
-        {/* Token 消耗 */}
         {totalTokens > 0 && (
           <div
             className="flex items-center gap-1.5 text-xs text-muted-foreground"
@@ -137,7 +126,6 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
           </div>
         )}
 
-        {/* 错误信息(如果有) */}
         {runtime.lastError && (
           <div className="ml-auto flex items-center gap-1.5 text-xs text-destructive max-w-md truncate">
             <Activity className="size-3.5 shrink-0" />
@@ -148,7 +136,6 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
         )}
       </div>
 
-      {/* 第二行:当前正在执行的工具(运行中且有 active 工具时) */}
       {isRunning && activeToolCalls.length > 0 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {activeToolCalls.map((tc) => (
@@ -163,7 +150,6 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
         </div>
       )}
 
-      {/* 第三行:流式文本预览(只在有 streaming 内容时,内容来自 currentTurn 最后一个 text/thinking item) */}
       {isRunning && streamingText && (
         <div className="mt-2 flex items-start gap-2">
           <MessageSquare className="size-3.5 shrink-0 mt-0.5 text-muted-foreground" />

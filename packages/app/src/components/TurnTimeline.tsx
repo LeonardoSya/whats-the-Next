@@ -1,74 +1,98 @@
+import { cjk } from '@streamdown/cjk'
+import { createCodePlugin } from '@streamdown/code'
+import { mermaid } from '@streamdown/mermaid'
 import {
   Activity,
   AlertTriangle,
   Brain,
   CheckCircle2,
   ChevronRight,
-  Layers,
   StopCircle,
 } from 'lucide-react'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
+import { Streamdown } from 'streamdown'
 import type {
+  AgentRuntimeState,
   CurrentTurn,
   RuntimeTurn,
-  TaskRuntimeState,
   TurnTimelineItem,
-} from '@/hooks/useTaskRuntime'
-import { ScrollArea } from './ui/scroll-area'
+} from '@/hooks/useAgentRuntime'
 import { cx } from '@/lib/utils'
 
 type TurnTimelineProps = {
-  readonly runtime: TaskRuntimeState
+  readonly runtime: AgentRuntimeState
 }
 
-const TRANSITION_META: Record<
-  RuntimeTurn['transition'],
-  { label: string; tone: string; Icon: typeof Layers }
-> = {
-  next_turn: { label: '继续下一轮', tone: 'text-primary bg-primary/10', Icon: ChevronRight },
-  done: { label: '正常结束', tone: 'text-emerald-600 bg-emerald-50', Icon: CheckCircle2 },
-  aborted: { label: '已中止', tone: 'text-zinc-600 bg-zinc-100', Icon: StopCircle },
-  error: { label: '出错', tone: 'text-destructive bg-destructive/10', Icon: AlertTriangle },
-}
+/**
+ * Turn 的"异常结束态"才显示状态提示 —— done / next_turn 是默认期望,不打扰用户。
+ * aborted / error 才有信息量(用户需要知道 agent 没正常完成)。
+ */
+const STATUS_META = {
+  aborted: { label: '已中止', tone: 'text-muted-foreground', Icon: StopCircle },
+  error: { label: '执行出错', tone: 'text-destructive', Icon: AlertTriangle },
+} as const
 
-const TEXT_COLLAPSE_THRESHOLD = 360
 const THINKING_COLLAPSE_THRESHOLD = 120
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
-  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`
-}
+// ── streamdown 插件配置(模块顶层实例化,跨渲染复用) ─────────────
+//
+// code: vitesse 主题对齐项目偏柔和的暖米白底色
+// cjk:  中文混排优化(emphasis/列表标记规则)
+// mermaid: LLM 输出 ```mermaid 块时直接渲染图表
+const code = createCodePlugin({ themes: ['vitesse-light', 'vitesse-dark'] })
+const STREAMDOWN_PLUGINS = { code, cjk, mermaid }
+const SHIKI_THEME: ['vitesse-light', 'vitesse-dark'] = ['vitesse-light', 'vitesse-dark']
 
 // ── 三种 timeline item 的渲染组件 ─────────────────────────────
 
 /**
- * 普通 LLM 文本输出。直接 <p>,不加卡片边框 —— text 是对话本体,
- * 不该被框包成"独立段落",这样工具卡片穿插时才能视觉上像"嵌入对话流"。
+ * 普通 LLM 文本输出 —— 用 streamdown 渲染 markdown(代码块/列表/链接/表格/mermaid)。
+ *
+ * 设计要点:
+ * - text 是对话本体,不加卡片边框,跟工具卡片穿插时视觉上"嵌入对话流"
+ * - prose-sm 锚定字号,prose-* 单元覆盖把段落/代码块的间距调到跟周围对话一致
+ * - 流式中(`isStreaming=true`)开启光标动画,完成后停止
+ * - 不再做长文本折叠 —— streamdown 内部代码块带横滚,长内容自然展开更符合 chat UX
  */
-function TextBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false)
-  const isLong = content.length > TEXT_COLLAPSE_THRESHOLD
-
+function TextBlock({ content, isStreaming }: { content: string; isStreaming: boolean }) {
   return (
-    <div>
-      <p
-        className={cx(
-          'text-xs text-foreground/85 whitespace-pre-wrap wrap-break-word leading-relaxed',
-          isLong && !expanded && 'line-clamp-6',
-        )}
+    <div
+      className={cx(
+        // 字号锚定 text-sm(跟 user 气泡和周围 chat 一致),不用 prose 默认放大
+        'prose prose-sm max-w-none text-foreground/90',
+        // 段落:行高对齐 ThinkingBlock 的 leading-relaxed (1.625),间距压到最紧
+        'prose-p:my-1 prose-p:leading-relaxed',
+        // 列表:间距同步收紧,列表项行高对齐
+        'prose-ul:my-1 prose-ul:pl-5 prose-ol:my-1 prose-ol:pl-5',
+        'prose-li:my-0.5 prose-li:leading-relaxed prose-li:marker:text-muted-foreground',
+        // 标题:不让 LLM 的 ## 撑大版面(全部压回正文级字号),间距收紧
+        'prose-headings:my-2 prose-headings:font-semibold prose-headings:text-foreground',
+        'prose-h1:text-base prose-h2:text-base prose-h3:text-sm prose-h4:text-sm',
+        // 代码块:背景柔和对齐项目主色
+        'prose-pre:my-2 prose-pre:bg-muted/40 prose-pre:border prose-pre:border-border',
+        // 行内 code:去掉 prose 默认的反引号 + 加 chip 样式
+        'prose-code:text-foreground/85 prose-code:bg-muted/60 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-normal prose-code:before:content-none prose-code:after:content-none',
+        // 链接:用主色,hover 才下划线
+        'prose-a:text-primary prose-a:no-underline hover:prose-a:underline',
+        // 强调
+        'prose-strong:text-foreground prose-strong:font-semibold',
+        // 引用块:去 prose 默认斜体,改细左边框
+        'prose-blockquote:my-2 prose-blockquote:not-italic prose-blockquote:border-l-2 prose-blockquote:pl-3 prose-blockquote:text-foreground/80',
+        // 水平线
+        'prose-hr:my-3',
+        // 防止 TextBlock 顶部/底部多余留白(让 turn 内多个 segment 视觉紧贴)
+        '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
+      )}
+    >
+      <Streamdown
+        shikiTheme={SHIKI_THEME}
+        plugins={STREAMDOWN_PLUGINS}
+        animated
+        isAnimating={isStreaming}
+        caret="block"
       >
         {content}
-      </p>
-      {isLong && (
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="mt-1 text-[10px] font-medium text-primary hover:underline"
-        >
-          {expanded ? '收起' : `展开全文(${content.length} 字)`}
-        </button>
-      )}
+      </Streamdown>
     </div>
   )
 }
@@ -94,7 +118,6 @@ function ThinkingBlock({ content }: { content: string }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-0.5">
             <span>思考</span>
-            <span className="font-mono">({content.length} 字)</span>
             {isLong && (
               <ChevronRight
                 className={cx('size-3 transition-transform', expanded && 'rotate-90')}
@@ -139,12 +162,8 @@ function ToolCallBlock({ item }: { item: Extract<TurnTimelineItem, { kind: 'tool
         {item.status === 'calling' && (
           <span className="size-2 shrink-0 rounded-full bg-primary animate-pulse" />
         )}
-        {item.status === 'done' && (
-          <CheckCircle2 className="size-3 shrink-0 text-emerald-500" />
-        )}
-        {item.status === 'error' && (
-          <AlertTriangle className="size-3 shrink-0 text-destructive" />
-        )}
+        {item.status === 'done' && <CheckCircle2 className="size-3 shrink-0 text-emerald-500" />}
+        {item.status === 'error' && <AlertTriangle className="size-3 shrink-0 text-destructive" />}
 
         <span className="font-mono font-medium text-foreground/90">{item.toolName}</span>
 
@@ -205,7 +224,11 @@ function ToolCallBlock({ item }: { item: Extract<TurnTimelineItem, { kind: 'tool
  */
 type RenderSegment =
   | { kind: 'single'; item: TurnTimelineItem; index: number }
-  | { kind: 'tool_group'; items: Extract<TurnTimelineItem, { kind: 'tool_call' }>[]; startIndex: number }
+  | {
+      kind: 'tool_group'
+      items: Extract<TurnTimelineItem, { kind: 'tool_call' }>[]
+      startIndex: number
+    }
 
 /**
  * 把 timeline 切分成渲染段。连续的 tool_call 合并成一组,文字/思考独立成段。
@@ -224,7 +247,6 @@ function buildSegments(timeline: readonly TurnTimelineItem[]): RenderSegment[] {
   }
 
   timeline.forEach((item, index) => {
-    // 空文字 / 空思考(trim 后无内容):整个 item 不参与渲染
     if ((item.kind === 'text' || item.kind === 'thinking') && !item.content.trim()) {
       flushTools()
       return
@@ -246,16 +268,24 @@ function buildSegments(timeline: readonly TurnTimelineItem[]): RenderSegment[] {
 
 /**
  * 渲染单个 segment。tool_group 加左竖线 + 缩进,视觉上"嵌入"在前后文字之间。
+ *
+ * `isStreaming` 仅对 text 有意义 —— 控制 streamdown 的光标闪烁动画,
+ * 由 CurrentTurnRow 在"timeline 最后一个 segment 是 text"时传 true。
  */
-function SegmentRow({ segment }: { segment: RenderSegment }) {
+function SegmentRow({
+  segment,
+  isStreaming = false,
+}: {
+  segment: RenderSegment
+  isStreaming?: boolean
+}) {
   if (segment.kind === 'single') {
     const item = segment.item
-    if (item.kind === 'text') return <TextBlock content={item.content} />
+    if (item.kind === 'text') return <TextBlock content={item.content} isStreaming={isStreaming} />
     if (item.kind === 'thinking') return <ThinkingBlock content={item.content} />
     return null
   }
 
-  // tool_group:左侧细竖线 + 缩进,所有 tool_call 视觉上是"一组动作"
   return (
     <div className="ml-3 border-l-2 border-border/60 pl-2.5 space-y-0.5">
       {segment.items.map((item) => (
@@ -267,79 +297,27 @@ function SegmentRow({ segment }: { segment: RenderSegment }) {
 
 // ── 一个 turn 的整体渲染 ──────────────────────────────────────
 
-function TurnHeader({
-  turn,
-  ongoing,
-  toolCallCount,
-}: {
-  turn?: RuntimeTurn
-  ongoing?: { turnNumber: number }
-  toolCallCount: number
-}) {
-  const isOngoing = !turn && !!ongoing
-  const turnNumber = turn?.turnCount ?? ongoing?.turnNumber ?? 0
-  const meta = turn ? TRANSITION_META[turn.transition] : undefined
-  const Icon = meta?.Icon
-
+/**
+ * turn 异常结束(中止/出错)时的内联提示。done / next_turn 不渲染。
+ */
+function TurnStatusFooter({ transition }: { transition: 'aborted' | 'error' }) {
+  const meta = STATUS_META[transition]
+  const Icon = meta.Icon
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <div
-        className={cx(
-          'flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-mono font-semibold',
-          isOngoing
-            ? 'bg-primary/10 text-primary border border-primary/20'
-            : 'bg-muted text-foreground',
-        )}
-      >
-        <Layers className="size-3" />
-        Turn {turnNumber}
-      </div>
-      {meta && Icon ? (
-        <div
-          className={cx(
-            'flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium',
-            meta.tone,
-          )}
-        >
-          <Icon className="size-3" />
-          {meta.label}
-        </div>
-      ) : isOngoing ? (
-        <div className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] font-medium text-primary bg-primary/10">
-          <span className="size-1.5 rounded-full bg-primary animate-pulse" />
-          进行中
-        </div>
-      ) : null}
-      {toolCallCount > 0 && (
-        <span className="text-[10px] text-muted-foreground">{toolCallCount} 个工具</span>
-      )}
-      {turn && turn.durationMs > 0 && (
-        <span
-          className="text-[10px] text-muted-foreground font-mono"
-          title="本轮内部测量的执行时长(LLM 调用 + 工具执行)"
-        >
-          {formatDuration(turn.durationMs)}
-        </span>
-      )}
-      {turn && (
-        <span
-          className="text-[10px] text-muted-foreground font-mono ml-auto"
-          title={`输入 ${turn.inputTokens} · 输出 ${turn.outputTokens}`}
-        >
-          ↑{turn.inputTokens} ↓{turn.outputTokens}
-        </span>
-      )}
+    <div className={cx('flex items-center gap-1.5 text-[11px]', meta.tone)}>
+      <Icon className="size-3" />
+      <span>{meta.label}</span>
     </div>
   )
 }
 
 function CompletedTurnRow({ turn }: { turn: RuntimeTurn }) {
   const segments = buildSegments(turn.timeline)
-  const toolCallCount = turn.timeline.filter((i) => i.kind === 'tool_call').length
+  const statusTransition: 'aborted' | 'error' | null =
+    turn.transition === 'aborted' || turn.transition === 'error' ? turn.transition : null
 
   return (
     <div className="space-y-1.5">
-      <TurnHeader turn={turn} toolCallCount={toolCallCount} />
       {segments.length > 0 && (
         <div className="space-y-1">
           {segments.map((seg, idx) => (
@@ -347,24 +325,30 @@ function CompletedTurnRow({ turn }: { turn: RuntimeTurn }) {
           ))}
         </div>
       )}
+      {statusTransition && <TurnStatusFooter transition={statusTransition} />}
     </div>
   )
 }
 
 function CurrentTurnRow({ current }: { current: CurrentTurn }) {
   const segments = buildSegments(current.timeline)
-  const toolCallCount = current.timeline.filter((i) => i.kind === 'tool_call').length
+  // 只有"timeline 最后一个 item 是 text"时,那段 text 还在流式累积 ——
+  // 工具调用之后开始的新 text 才会真正流;前面被 tool_call 打断的 text 已经定型。
+  const lastIdx = segments.length - 1
+  const lastSeg = segments[lastIdx]
+  const lastIsStreamingText = lastSeg?.kind === 'single' && lastSeg.item.kind === 'text'
+
+  if (segments.length === 0) return null
 
   return (
-    <div className="space-y-1.5">
-      <TurnHeader ongoing={{ turnNumber: current.turnNumber }} toolCallCount={toolCallCount} />
-      {segments.length > 0 && (
-        <div className="space-y-1">
-          {segments.map((seg, idx) => (
-            <SegmentRow key={segmentKey(seg, idx)} segment={seg} />
-          ))}
-        </div>
-      )}
+    <div className="space-y-1">
+      {segments.map((seg, idx) => (
+        <SegmentRow
+          key={segmentKey(seg, idx)}
+          segment={seg}
+          isStreaming={lastIsStreamingText && idx === lastIdx}
+        />
+      ))}
     </div>
   )
 }
@@ -381,9 +365,11 @@ function segmentKey(seg: RenderSegment, idx: number): string {
  * TurnTimeline —— 按事件时序展示 agent 的运行节奏。
  *
  * 视觉设计原则(对齐 Cursor / Claude Code):
- * - text 是对话本体 → 直接 <p>,无边框,跟 turn 自然流
+ * - text 是对话本体 → streamdown 渲染 markdown,跟 turn 自然流
  * - thinking 是辅助信息 → 灰色折叠块,显示前 3 行预览
  * - tool_call 是嵌入动作 → 缩进 + 左竖线,连续工具共享一组,视觉上"嵌入"文字流
+ * - turn 元信息(轮数/duration/token)对用户没意义,完全省略
+ * - 多 turn 之间用一根细的 divider 区分,失败/中止才显示状态提示
  *
  * 这样"被工具切碎的句子"读起来像"agent 边说边做",而不是"两段独立段落 + 中间的工具盒子"。
  */
@@ -392,21 +378,27 @@ export function TurnTimeline({ runtime }: TurnTimelineProps) {
 
   if (isInactive) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-        <Activity className="size-8 opacity-30" />
-        <p className="text-xs">尚未执行,点击"执行"按钮后这里会实时显示 agent 的运行节奏</p>
+      <div className="flex flex-col items-center justify-center gap-2 py-6 text-muted-foreground">
+        <Activity className="size-6 opacity-30" />
+        <p className="text-xs">等待 agent 开始响应...</p>
       </div>
     )
   }
 
   return (
-    <ScrollArea className="flex-1">
-      <div className="px-6 py-3 space-y-4">
-        {runtime.turns.map((turn) => (
-          <CompletedTurnRow key={`${turn.turnCount}-${turn.completedAt}`} turn={turn} />
-        ))}
-        {runtime.currentTurn && <CurrentTurnRow current={runtime.currentTurn} />}
-      </div>
-    </ScrollArea>
+    <div className="space-y-3">
+      {runtime.turns.map((turn, idx) => (
+        <Fragment key={`${turn.turnCount}-${turn.completedAt}`}>
+          {idx > 0 && <div className="border-t border-border/30" />}
+          <CompletedTurnRow turn={turn} />
+        </Fragment>
+      ))}
+      {runtime.currentTurn && (
+        <>
+          {runtime.turns.length > 0 && <div className="border-t border-border/30" />}
+          <CurrentTurnRow current={runtime.currentTurn} />
+        </>
+      )}
+    </div>
   )
 }

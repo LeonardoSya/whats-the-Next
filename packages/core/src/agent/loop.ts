@@ -147,8 +147,7 @@ export async function* runAgent(ctx: AgentContext): AsyncGenerator<AgentEvent> {
             break
 
           case 'tool-error': {
-            const message =
-              part.error instanceof Error ? part.error.message : String(part.error)
+            const message = part.error instanceof Error ? part.error.message : String(part.error)
             yield {
               type: 'tool_error',
               toolCallId: part.toolCallId,
@@ -174,8 +173,7 @@ export async function* runAgent(ctx: AgentContext): AsyncGenerator<AgentEvent> {
           ...EMPTY_TURN_METRICS,
           transition: 'aborted',
         }
-        yield { type: 
-        'state_change', state: 'idle' }
+        yield { type: 'state_change', state: 'idle' }
         return
       }
       const err = error instanceof Error ? error.message : String(error)

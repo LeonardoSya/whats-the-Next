@@ -1,4 +1,17 @@
 @import "tailwindcss";
+@import "streamdown/styles.css";
+
+/*
+ * Tailwind v4 用 @plugin 引入 typography 插件,
+ * 提供 prose / prose-sm / prose-p:* / prose-pre:* 等 markdown 排版类。
+ */
+@plugin "@tailwindcss/typography";
+
+/*
+ * Streamdown 用了运行时拼接的 class,@source 显式扫描确保不被 purge。
+ * bun workspace 是 isolated 模式,本地 symlink 在 packages/app/node_modules 下。
+ */
+@source "../node_modules/streamdown/dist/*.js";
 
 /*
  * The Next — 自定义主题

@@ -12,7 +12,7 @@ export type AgentEvent =
 
   // llm 流式输出文本中（用来模拟打字机效果）
   | TextDeltaEvent
-  
+
   // llm 一段文本输出完毕
   | MessageCompleteEvent
 

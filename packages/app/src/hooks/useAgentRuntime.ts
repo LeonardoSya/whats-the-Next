@@ -1,5 +1,4 @@
-import type { AgentEvent, AgentState, TaskEvent } from '@the-next/core'
-import { useCallback, useState } from 'react'
+import type { AgentEvent, AgentState } from '@the-next/core'
 
 /**
  * Turn 内的事件时间线项 —— 按事件到达顺序记录,UI 直接照序渲染。
@@ -53,17 +52,17 @@ export type CurrentTurn = {
 }
 
 /**
- * 单个 task 的运行时状态(timeline-based 模型)。
+ * Agent 一次 session 的运行时状态(timeline-based 模型)。
  *
  * 数据组织:
  * - 已完成的 turn 累积在 `turns`,每个带自己的 timeline
  * - 正在跑的 turn 单独维护在 `currentTurn`,turn_complete 时迁移
  *
- * 不再保留全局的 toolCalls / streamingText 字段 —— 它们是派生信息,
+ * 不保留全局的 toolCalls / streamingText 字段 —— 它们是派生信息,
  * 通过 helper(getActiveToolCalls / getStreamingText / getTotalToolCallCount)按需计算。
  * 这样自然解决"跨 turn 残留"的问题(currentTurn 在 turn_complete 时整体清空)。
  */
-export type TaskRuntimeState = {
+export type AgentRuntimeState = {
   readonly agentState: AgentState
   readonly turnCount: number
   readonly totalInputTokens: number
@@ -73,7 +72,7 @@ export type TaskRuntimeState = {
   readonly lastError?: string
 }
 
-const EMPTY_STATE: TaskRuntimeState = {
+export const EMPTY_AGENT_RUNTIME: AgentRuntimeState = {
   agentState: 'idle',
   turnCount: 0,
   totalInputTokens: 0,
@@ -93,7 +92,6 @@ function appendTextToTimeline(
 ): readonly TurnTimelineItem[] {
   if (!content) return timeline
   const last = timeline[timeline.length - 1]
-  // 连续同类型 item 合并,避免 timeline 因每个 chunk 暴增
   if (last && last.kind === kind) {
     return [...timeline.slice(0, -1), { ...last, content: last.content + content }]
   }
@@ -121,7 +119,6 @@ function processTextDelta(cur: CurrentTurn, delta: string): CurrentTurn {
         mode = false
         continue
       }
-      // 没找到关闭标签:除尾部"可能是 </think> 前缀"的 N 个字符外,其余落地
       if (buffer.length > THINK_CLOSE.length) {
         const flush = buffer.slice(0, buffer.length - THINK_CLOSE.length)
         timeline = appendTextToTimeline(timeline, 'thinking', flush)
@@ -136,7 +133,6 @@ function processTextDelta(cur: CurrentTurn, delta: string): CurrentTurn {
         mode = true
         continue
       }
-      // 没找到开启标签:除尾部"可能是 <think> 前缀"的 N 个字符外,其余落地
       if (buffer.length > THINK_OPEN.length) {
         const flush = buffer.slice(0, buffer.length - THINK_OPEN.length)
         timeline = appendTextToTimeline(timeline, 'text', flush)
@@ -149,7 +145,7 @@ function processTextDelta(cur: CurrentTurn, delta: string): CurrentTurn {
   return { ...cur, timeline, thinkingMode: mode, rawBuffer: buffer }
 }
 
-function ensureCurrent(state: TaskRuntimeState): CurrentTurn {
+function ensureCurrent(state: AgentRuntimeState): CurrentTurn {
   return (
     state.currentTurn ?? {
       turnNumber: state.turnCount + 1,
@@ -162,7 +158,13 @@ function ensureCurrent(state: TaskRuntimeState): CurrentTurn {
 
 // ── reducer ──────────────────────────────────────────────────────
 
-function reduce(state: TaskRuntimeState, event: AgentEvent): TaskRuntimeState {
+/**
+ * 核心 reducer —— 把一个 AgentEvent 折叠进 runtime state。
+ *
+ * 所有返回新对象都是不可变的(即便内部 timeline 只变了一个 item,
+ * 也会返回全新的 state/turns/timeline 引用)。
+ */
+export function applyAgentEvent(state: AgentRuntimeState, event: AgentEvent): AgentRuntimeState {
   switch (event.type) {
     case 'state_change':
       return { ...state, agentState: event.state }
@@ -250,7 +252,7 @@ function reduce(state: TaskRuntimeState, event: AgentEvent): TaskRuntimeState {
             completedAt: Date.now(),
           },
         ],
-        currentTurn: undefined, // 等下一个 turn 的事件来时 lazy 创建
+        currentTurn: undefined,
       }
     }
 
@@ -275,7 +277,7 @@ function reduce(state: TaskRuntimeState, event: AgentEvent): TaskRuntimeState {
 
 /** 当前正在调用中(还没拿到结果)的工具列表 —— 给 RuntimeBar 显示"正在执行" */
 export function getActiveToolCalls(
-  state: TaskRuntimeState,
+  state: AgentRuntimeState,
 ): readonly Extract<TurnTimelineItem, { kind: 'tool_call' }>[] {
   if (!state.currentTurn) return []
   return state.currentTurn.timeline.filter(
@@ -285,7 +287,7 @@ export function getActiveToolCalls(
 }
 
 /** 当前正在累积的 streaming 文本(currentTurn 的最后一个 text/thinking item) */
-export function getStreamingText(state: TaskRuntimeState): string {
+export function getStreamingText(state: AgentRuntimeState): string {
   if (!state.currentTurn) return ''
   const last = state.currentTurn.timeline[state.currentTurn.timeline.length - 1]
   if (last?.kind === 'text' || last?.kind === 'thinking') return last.content
@@ -293,7 +295,7 @@ export function getStreamingText(state: TaskRuntimeState): string {
 }
 
 /** 累计调用过的工具次数(turns 历史 + currentTurn) */
-export function getTotalToolCallCount(state: TaskRuntimeState): number {
+export function getTotalToolCallCount(state: AgentRuntimeState): number {
   let count = 0
   for (const turn of state.turns) {
     for (const item of turn.timeline) {
@@ -307,58 +309,3 @@ export function getTotalToolCallCount(state: TaskRuntimeState): number {
   }
   return count
 }
-
-// ── hook ─────────────────────────────────────────────────────────
-
-/**
- * useTaskRuntime —— 维护所有 task 的运行时状态。
- *
- * 单例风格:整个 app 共享一份 Record<taskId, TaskRuntimeState>,
- * useTasks 在 WS 收到 task_agent_event 时调用 applyEvent。
- */
-export function useTaskRuntime() {
-  const [runtimes, setRuntimes] = useState<Record<string, TaskRuntimeState>>({})
-
-  const applyEvent = useCallback((taskEvent: TaskEvent) => {
-    if (taskEvent.type === 'task_agent_event') {
-      const taskId = taskEvent.taskId
-      const event = taskEvent.event
-      setRuntimes((prev) => {
-        const current = prev[taskId] ?? EMPTY_STATE
-        const next = reduce(current, event)
-        if (next === current) return prev
-        return { ...prev, [taskId]: next }
-      })
-    } else if (taskEvent.type === 'task_status_changed') {
-      // 任务终止时:把还没 turn_complete 的 currentTurn 也清掉(避免残留 streaming buffer)
-      if (
-        taskEvent.status === 'completed' ||
-        taskEvent.status === 'failed' ||
-        taskEvent.status === 'cancelled'
-      ) {
-        setRuntimes((prev) => {
-          const current = prev[taskEvent.taskId]
-          if (!current?.currentTurn) return prev
-          return { ...prev, [taskEvent.taskId]: { ...current, currentTurn: undefined } }
-        })
-      }
-    }
-  }, [])
-
-  const reset = useCallback((taskId: string) => {
-    setRuntimes((prev) => {
-      if (!(taskId in prev)) return prev
-      const { [taskId]: _removed, ...rest } = prev
-      return rest
-    })
-  }, [])
-
-  const getRuntime = useCallback(
-    (taskId: string): TaskRuntimeState => runtimes[taskId] ?? EMPTY_STATE,
-    [runtimes],
-  )
-
-  return { runtimes, applyEvent, reset, getRuntime }
-}
-
-export const EMPTY_RUNTIME_STATE = EMPTY_STATE
