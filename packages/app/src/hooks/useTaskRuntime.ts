@@ -2,60 +2,74 @@ import type { AgentEvent, AgentState, TaskEvent } from '@the-next/core'
 import { useCallback, useState } from 'react'
 
 /**
- * 单次工具调用的实时状态(从 tool_call 事件累积到 tool_result/tool_error)。
+ * Turn 内的事件时间线项 —— 按事件到达顺序记录,UI 直接照序渲染。
+ *
+ * 三种类型:
+ * - text:LLM 普通文本输出
+ * - thinking:LLM reasoning 内容(从 <think>...</think> 标签解析出来)
+ * - tool_call:工具调用(从发起到结果/错误回灌的完整生命周期)
+ *
+ * 连续的 text/thinking item 会自动合并(避免每个 token 都新开一项)。
  */
-export type RuntimeToolCall = {
-  readonly toolCallId: string
-  readonly toolName: string
-  readonly args: Record<string, unknown>
-  readonly status: 'calling' | 'done' | 'error'
-  readonly result?: unknown
-  readonly error?: string
-  readonly turnNumber: number
-  readonly startedAt: number
-}
+export type TurnTimelineItem =
+  | { readonly kind: 'text'; readonly content: string }
+  | { readonly kind: 'thinking'; readonly content: string }
+  | {
+      readonly kind: 'tool_call'
+      readonly toolCallId: string
+      readonly toolName: string
+      readonly args: Record<string, unknown>
+      readonly status: 'calling' | 'done' | 'error'
+      readonly result?: unknown
+      readonly error?: string
+      readonly startedAt: number
+    }
 
 /**
- * 一个 turn 完成时的快照(状态机骨架的 turn_complete 事件投影)。
- *
- * `assistantText` 是本轮 LLM 输出的完整文本(可能为空)。
- * `durationMs` 是 turn 内部测量的执行时长,首轮也能拿到。
+ * 已完成的 turn 快照(由 turn_complete 事件落盘)。
  */
 export type RuntimeTurn = {
   readonly turnCount: number
-  readonly toolCallCount: number
+  readonly timeline: readonly TurnTimelineItem[]
   readonly inputTokens: number
   readonly outputTokens: number
-  readonly assistantText: string
   readonly durationMs: number
   readonly transition: 'next_turn' | 'done' | 'aborted' | 'error'
   readonly completedAt: number
 }
 
 /**
- * 单个 task 的运行时状态。
+ * 正在跑的 turn(还没收到 turn_complete)—— 持有事件累积 + <think> 解析的中间状态。
  *
- * 由 useTaskRuntime 维护一个 Map<taskId, TaskRuntimeState>,
- * 通过消费 task_agent_event 流增量更新。
+ * `rawBuffer` 用来跨 chunk 缓冲尾部可能不完整的 `<think>` / `</think>` 标签
+ * (比如 chunk 边界把标签切成 "<thi" + "nk>");`thinkingMode` 标识当前累积的应当是
+ * thinking 还是 text item。
+ */
+export type CurrentTurn = {
+  readonly turnNumber: number
+  readonly timeline: readonly TurnTimelineItem[]
+  readonly thinkingMode: boolean
+  readonly rawBuffer: string
+}
+
+/**
+ * 单个 task 的运行时状态(timeline-based 模型)。
  *
- * 这是"控制面"思路在 Task 模式下的落点:用户不只看到 status 字段,
- * 而是看到 agent 真的在做什么(thinking / 调哪个工具 / 已经跑了几轮 / 用了多少 token)。
+ * 数据组织:
+ * - 已完成的 turn 累积在 `turns`,每个带自己的 timeline
+ * - 正在跑的 turn 单独维护在 `currentTurn`,turn_complete 时迁移
+ *
+ * 不再保留全局的 toolCalls / streamingText 字段 —— 它们是派生信息,
+ * 通过 helper(getActiveToolCalls / getStreamingText / getTotalToolCallCount)按需计算。
+ * 这样自然解决"跨 turn 残留"的问题(currentTurn 在 turn_complete 时整体清空)。
  */
 export type TaskRuntimeState = {
-  /** 当前 agent 子状态(thinking / streaming / tool_calling / done / error / idle) */
   readonly agentState: AgentState
-  /** 已完成的 turn 数(turn_complete 事件的累计) */
   readonly turnCount: number
-  /** 累计输入/输出 token */
   readonly totalInputTokens: number
   readonly totalOutputTokens: number
-  /** 本任务自启动以来产生的所有工具调用(实时更新) */
-  readonly toolCalls: readonly RuntimeToolCall[]
-  /** turn_complete 事件历史(显示"任务节奏") */
   readonly turns: readonly RuntimeTurn[]
-  /** 当前轮正在流式输出的文本(message_complete 时清空) */
-  readonly streamingText: string
-  /** 最近一次 error 事件的内容(便于详情页展示失败原因) */
+  readonly currentTurn?: CurrentTurn
   readonly lastError?: string
 }
 
@@ -64,65 +78,161 @@ const EMPTY_STATE: TaskRuntimeState = {
   turnCount: 0,
   totalInputTokens: 0,
   totalOutputTokens: 0,
-  toolCalls: [],
   turns: [],
-  streamingText: '',
+}
+
+const THINK_OPEN = '<think>'
+const THINK_CLOSE = '</think>'
+
+// ── 不可变 timeline 操作 ──────────────────────────────────────────
+
+function appendTextToTimeline(
+  timeline: readonly TurnTimelineItem[],
+  kind: 'text' | 'thinking',
+  content: string,
+): readonly TurnTimelineItem[] {
+  if (!content) return timeline
+  const last = timeline[timeline.length - 1]
+  // 连续同类型 item 合并,避免 timeline 因每个 chunk 暴增
+  if (last && last.kind === kind) {
+    return [...timeline.slice(0, -1), { ...last, content: last.content + content }]
+  }
+  return [...timeline, { kind, content }]
 }
 
 /**
- * 把单个 AgentEvent 应用到 TaskRuntimeState 上,返回新 state。
+ * Streaming-safe 的 <think> 标签解析。
  *
- * 抽成纯函数便于测试,也保证 React state 更新的不可变性。
+ * 处理一次新到的 text-delta:把 cur.rawBuffer + delta 按 <think>/</think> 切段,
+ * 完整段落落到 timeline 对应 kind 的 item 里;尾部可能是不完整标签的字符留在 rawBuffer
+ * 里等下一个 chunk(避免把 "<thi" 这种半截当成普通文本)。
  */
+function processTextDelta(cur: CurrentTurn, delta: string): CurrentTurn {
+  let timeline: readonly TurnTimelineItem[] = cur.timeline
+  let mode = cur.thinkingMode
+  let buffer = cur.rawBuffer + delta
+
+  while (true) {
+    if (mode) {
+      const closeIdx = buffer.indexOf(THINK_CLOSE)
+      if (closeIdx >= 0) {
+        timeline = appendTextToTimeline(timeline, 'thinking', buffer.slice(0, closeIdx))
+        buffer = buffer.slice(closeIdx + THINK_CLOSE.length)
+        mode = false
+        continue
+      }
+      // 没找到关闭标签:除尾部"可能是 </think> 前缀"的 N 个字符外,其余落地
+      if (buffer.length > THINK_CLOSE.length) {
+        const flush = buffer.slice(0, buffer.length - THINK_CLOSE.length)
+        timeline = appendTextToTimeline(timeline, 'thinking', flush)
+        buffer = buffer.slice(-THINK_CLOSE.length)
+      }
+      break
+    } else {
+      const openIdx = buffer.indexOf(THINK_OPEN)
+      if (openIdx >= 0) {
+        timeline = appendTextToTimeline(timeline, 'text', buffer.slice(0, openIdx))
+        buffer = buffer.slice(openIdx + THINK_OPEN.length)
+        mode = true
+        continue
+      }
+      // 没找到开启标签:除尾部"可能是 <think> 前缀"的 N 个字符外,其余落地
+      if (buffer.length > THINK_OPEN.length) {
+        const flush = buffer.slice(0, buffer.length - THINK_OPEN.length)
+        timeline = appendTextToTimeline(timeline, 'text', flush)
+        buffer = buffer.slice(-THINK_OPEN.length)
+      }
+      break
+    }
+  }
+
+  return { ...cur, timeline, thinkingMode: mode, rawBuffer: buffer }
+}
+
+function ensureCurrent(state: TaskRuntimeState): CurrentTurn {
+  return (
+    state.currentTurn ?? {
+      turnNumber: state.turnCount + 1,
+      timeline: [],
+      thinkingMode: false,
+      rawBuffer: '',
+    }
+  )
+}
+
+// ── reducer ──────────────────────────────────────────────────────
+
 function reduce(state: TaskRuntimeState, event: AgentEvent): TaskRuntimeState {
   switch (event.type) {
     case 'state_change':
       return { ...state, agentState: event.state }
 
-    case 'text_delta':
-      return { ...state, streamingText: state.streamingText + event.delta }
+    case 'text_delta': {
+      const cur = ensureCurrent(state)
+      return { ...state, currentTurn: processTextDelta(cur, event.delta) }
+    }
 
-    case 'message_complete':
-      // 一轮 LLM 回答完毕,流式缓冲清零(下一轮重新累积)
-      return { ...state, streamingText: '' }
-
-    case 'tool_call':
+    case 'tool_call': {
+      const cur = ensureCurrent(state)
       return {
         ...state,
-        toolCalls: [
-          ...state.toolCalls,
-          {
-            toolCallId: event.toolCallId,
-            toolName: event.toolName,
-            args: event.args,
-            status: 'calling',
-            turnNumber: state.turnCount + 1,
-            startedAt: Date.now(),
-          },
-        ],
+        currentTurn: {
+          ...cur,
+          timeline: [
+            ...cur.timeline,
+            {
+              kind: 'tool_call',
+              toolCallId: event.toolCallId,
+              toolName: event.toolName,
+              args: event.args,
+              status: 'calling',
+              startedAt: Date.now(),
+            },
+          ],
+        },
       }
+    }
 
-    case 'tool_result':
+    case 'tool_result': {
+      if (!state.currentTurn) return state
       return {
         ...state,
-        toolCalls: state.toolCalls.map((tc) =>
-          tc.toolCallId === event.toolCallId
-            ? { ...tc, status: 'done' as const, result: event.result }
-            : tc,
-        ),
+        currentTurn: {
+          ...state.currentTurn,
+          timeline: state.currentTurn.timeline.map((item) =>
+            item.kind === 'tool_call' && item.toolCallId === event.toolCallId
+              ? { ...item, status: 'done' as const, result: event.result }
+              : item,
+          ),
+        },
       }
+    }
 
-    case 'tool_error':
+    case 'tool_error': {
+      if (!state.currentTurn) return state
       return {
         ...state,
-        toolCalls: state.toolCalls.map((tc) =>
-          tc.toolCallId === event.toolCallId
-            ? { ...tc, status: 'error' as const, error: event.error }
-            : tc,
-        ),
+        currentTurn: {
+          ...state.currentTurn,
+          timeline: state.currentTurn.timeline.map((item) =>
+            item.kind === 'tool_call' && item.toolCallId === event.toolCallId
+              ? { ...item, status: 'error' as const, error: event.error }
+              : item,
+          ),
+        },
+      }
+    }
+
+    case 'turn_complete': {
+      // 把 currentTurn 落盘到 turns。currentTurn 可能不存在(max_turns/aborted/error
+      // 这种没真正跑 turn 就 emit 的场景)—— 此时 timeline 为空。
+      let timeline: readonly TurnTimelineItem[] = state.currentTurn?.timeline ?? []
+      // flush rawBuffer 里的尾巴(turn 结束时不再需要等"可能是标签前缀"了)
+      if (state.currentTurn?.rawBuffer) {
+        const kind = state.currentTurn.thinkingMode ? 'thinking' : 'text'
+        timeline = appendTextToTimeline(timeline, kind, state.currentTurn.rawBuffer)
       }
 
-    case 'turn_complete':
       return {
         ...state,
         turnCount: event.turnCount,
@@ -132,41 +242,79 @@ function reduce(state: TaskRuntimeState, event: AgentEvent): TaskRuntimeState {
           ...state.turns,
           {
             turnCount: event.turnCount,
-            toolCallCount: event.toolCallCount,
+            timeline,
             inputTokens: event.inputTokens,
             outputTokens: event.outputTokens,
-            // 线上事件偶发缺字段时 JSON 反序列化会得到 undefined
-            assistantText: event.assistantText ?? '',
             durationMs: event.durationMs,
             transition: event.transition,
             completedAt: Date.now(),
           },
         ],
+        currentTurn: undefined, // 等下一个 turn 的事件来时 lazy 创建
       }
+    }
+
+    case 'message_complete':
+      // timeline 模型下不再消费 —— 文本已经通过 text_delta 增量落到 timeline 了
+      return state
 
     case 'error':
       return { ...state, lastError: event.error }
 
     case 'permission_request':
-      // 权限请求事件由 useAgent / 顶层处理,runtime 暂不消费
       return state
 
     default: {
-      // 类型穷尽守卫
       const _exhaustive: never = event
       return state
     }
   }
 }
 
+// ── 派生 helper(给 UI 组件用) ──────────────────────────────────
+
+/** 当前正在调用中(还没拿到结果)的工具列表 —— 给 RuntimeBar 显示"正在执行" */
+export function getActiveToolCalls(
+  state: TaskRuntimeState,
+): readonly Extract<TurnTimelineItem, { kind: 'tool_call' }>[] {
+  if (!state.currentTurn) return []
+  return state.currentTurn.timeline.filter(
+    (item): item is Extract<TurnTimelineItem, { kind: 'tool_call' }> =>
+      item.kind === 'tool_call' && item.status === 'calling',
+  )
+}
+
+/** 当前正在累积的 streaming 文本(currentTurn 的最后一个 text/thinking item) */
+export function getStreamingText(state: TaskRuntimeState): string {
+  if (!state.currentTurn) return ''
+  const last = state.currentTurn.timeline[state.currentTurn.timeline.length - 1]
+  if (last?.kind === 'text' || last?.kind === 'thinking') return last.content
+  return ''
+}
+
+/** 累计调用过的工具次数(turns 历史 + currentTurn) */
+export function getTotalToolCallCount(state: TaskRuntimeState): number {
+  let count = 0
+  for (const turn of state.turns) {
+    for (const item of turn.timeline) {
+      if (item.kind === 'tool_call') count++
+    }
+  }
+  if (state.currentTurn) {
+    for (const item of state.currentTurn.timeline) {
+      if (item.kind === 'tool_call') count++
+    }
+  }
+  return count
+}
+
+// ── hook ─────────────────────────────────────────────────────────
+
 /**
  * useTaskRuntime —— 维护所有 task 的运行时状态。
  *
- * 单例风格:整个 app 共享一份 Map<taskId, TaskRuntimeState>,
+ * 单例风格:整个 app 共享一份 Record<taskId, TaskRuntimeState>,
  * useTasks 在 WS 收到 task_agent_event 时调用 applyEvent。
- *
- * 任务被删除时调用 reset(taskId) 清理其 runtime 状态;
- * 任务重新执行时调用 reset(taskId) 重置(避免上一轮的 toolCalls 残留)。
  */
 export function useTaskRuntime() {
   const [runtimes, setRuntimes] = useState<Record<string, TaskRuntimeState>>({})
@@ -182,7 +330,7 @@ export function useTaskRuntime() {
         return { ...prev, [taskId]: next }
       })
     } else if (taskEvent.type === 'task_status_changed') {
-      // running 状态切换到非 running 时,把 streamingText 清空(避免残留)
+      // 任务终止时:把还没 turn_complete 的 currentTurn 也清掉(避免残留 streaming buffer)
       if (
         taskEvent.status === 'completed' ||
         taskEvent.status === 'failed' ||
@@ -190,12 +338,8 @@ export function useTaskRuntime() {
       ) {
         setRuntimes((prev) => {
           const current = prev[taskEvent.taskId]
-          if (!current) return prev
-          if (!current.streamingText && current.agentState !== 'streaming') return prev
-          return {
-            ...prev,
-            [taskEvent.taskId]: { ...current, streamingText: '' },
-          }
+          if (!current?.currentTurn) return prev
+          return { ...prev, [taskEvent.taskId]: { ...current, currentTurn: undefined } }
         })
       }
     }

@@ -1,7 +1,12 @@
 import type { AgentState } from '@the-next/core'
 import { Activity, Layers, Loader2, MessageSquare, Wrench, Zap } from 'lucide-react'
 import { useMemo } from 'react'
-import type { TaskRuntimeState } from '@/hooks/useTaskRuntime'
+import {
+  getActiveToolCalls,
+  getStreamingText,
+  getTotalToolCallCount,
+  type TaskRuntimeState,
+} from '@/hooks/useTaskRuntime'
 import { cx } from '@/lib/utils'
 
 type TaskRuntimeBarProps = {
@@ -43,21 +48,15 @@ function formatTokens(n: number): string {
 export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
   const isRunning = taskStatus === 'running'
 
-  const activeToolCalls = useMemo(
-    () => runtime.toolCalls.filter((tc) => tc.status === 'calling'),
-    [runtime.toolCalls],
-  )
+  const activeToolCalls = useMemo(() => getActiveToolCalls(runtime), [runtime])
+  const totalToolCallCount = useMemo(() => getTotalToolCallCount(runtime), [runtime])
+  const streamingText = useMemo(() => getStreamingText(runtime), [runtime])
 
   const stateMeta = AGENT_STATE_LABELS[runtime.agentState]
   const totalTokens = runtime.totalInputTokens + runtime.totalOutputTokens
 
   // 没有运行时数据 + 任务非 running:不显示这个 bar(避免打扰)
-  if (
-    !isRunning &&
-    runtime.turnCount === 0 &&
-    runtime.toolCalls.length === 0 &&
-    !runtime.streamingText
-  ) {
+  if (!isRunning && runtime.turnCount === 0 && totalToolCallCount === 0 && !streamingText) {
     return null
   }
 
@@ -107,7 +106,7 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
         </div>
 
         {/* 工具调用累计 */}
-        {runtime.toolCalls.length > 0 && (
+        {totalToolCallCount > 0 && (
           <div
             className="flex items-center gap-1.5 text-xs text-muted-foreground"
             title="本次执行已调用工具次数"
@@ -115,7 +114,7 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
             <Wrench className="size-3.5" />
             <span>
               <span className="font-mono font-semibold text-foreground">
-                {runtime.toolCalls.length}
+                {totalToolCallCount}
               </span>{' '}
               次工具
             </span>
@@ -164,12 +163,12 @@ export function TaskRuntimeBar({ runtime, taskStatus }: TaskRuntimeBarProps) {
         </div>
       )}
 
-      {/* 第三行:流式文本预览(只在有 streaming 内容时) */}
-      {isRunning && runtime.streamingText && (
+      {/* 第三行:流式文本预览(只在有 streaming 内容时,内容来自 currentTurn 最后一个 text/thinking item) */}
+      {isRunning && streamingText && (
         <div className="mt-2 flex items-start gap-2">
           <MessageSquare className="size-3.5 shrink-0 mt-0.5 text-muted-foreground" />
           <p className="text-xs text-foreground/80 line-clamp-2 leading-relaxed font-mono">
-            {runtime.streamingText}
+            {streamingText}
           </p>
         </div>
       )}

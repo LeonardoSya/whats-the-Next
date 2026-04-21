@@ -1,6 +1,6 @@
 import type { Task } from '@the-next/core'
 import { Circle, CircleCheck, Layers, Loader2, Play, Trash2, Wrench } from 'lucide-react'
-import type { TaskRuntimeState } from '@/hooks/useTaskRuntime'
+import { getTotalToolCallCount, type TaskRuntimeState } from '@/hooks/useTaskRuntime'
 import { cx } from '@/lib/utils'
 import { TaskTypeBadge } from './TaskTypeBadge'
 
@@ -40,8 +40,9 @@ export function TaskItem({ task, selected, onSelect, onRun, onDelete, runtime }:
     task.status === 'pending' || task.status === 'failed' || task.status === 'scheduled'
   const isRunning = task.status === 'running'
 
+  const totalToolCallCount = runtime ? getTotalToolCallCount(runtime) : 0
   // 运行中且有 runtime 数据,展示进度;静态 task 显示创建时间
-  const showProgress = isRunning && runtime && (runtime.turnCount > 0 || runtime.toolCalls.length > 0)
+  const showProgress = isRunning && runtime && (runtime.turnCount > 0 || totalToolCallCount > 0)
 
   return (
     <button
@@ -74,10 +75,10 @@ export function TaskItem({ task, selected, onSelect, onRun, onDelete, runtime }:
                 <Layers className="size-3" />
                 Turn {runtime.turnCount}
               </span>
-              {runtime.toolCalls.length > 0 && (
+              {totalToolCallCount > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-600">
                   <Wrench className="size-3" />
-                  {runtime.toolCalls.length}
+                  {totalToolCallCount}
                 </span>
               )}
             </>

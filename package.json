@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "kill:server": "pkill -9 -f 'the-next/packages/core/src/server/main.ts' 2>/dev/null; true",
+    "kill:server": "lsof -ti tcp:3001-3010 -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null; pkill -9 -f 'src/server/main.ts' 2>/dev/null; true",
     "//dev": "本地开发需分别启动 dev:core 和 dev:app",
     "dev:core": "cd packages/core && bun --hot src/server/main.ts",
     "dev:app": "cd packages/app && bun run tauri dev",
