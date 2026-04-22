@@ -1,4 +1,4 @@
-import type { RiskLevel, ToolDefinition } from './types'
+import type { RiskLevel, ToolDefinition, ToolExecuteOptions } from './types'
 
 /**
  * 审批回调：发送权限请求到前端，返回 Promise<boolean>
@@ -25,8 +25,8 @@ function resolveRisk(tool: ToolDefinition, args: unknown): RiskLevel {
 export const withPermissionGate = (
   tool: ToolDefinition,
   approve: ApprovalCallback,
-): ((args: unknown) => Promise<unknown>) => {
-  return async (args: unknown) => {
+): ((args: unknown, options?: ToolExecuteOptions) => Promise<unknown>) => {
+  return async (args: unknown, options?: ToolExecuteOptions) => {
     const risk = resolveRisk(tool, args)
 
     if (risk === 'dangerous') {
@@ -43,6 +43,6 @@ export const withPermissionGate = (
       }
     }
 
-    return tool.execute(args)
+    return tool.execute(args, options)
   }
 }

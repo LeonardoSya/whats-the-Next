@@ -1,12 +1,9 @@
-/**
- * bun ws server — 单轮对话 Agent 桥接前端。
- *
- * 唯一职责:把 runAgent 的 AgentEvent 流通过 WebSocket 喂给前端。
- * 不做持久化、不做调度、不区分会话。前端关闭即结束。
- */
+// bun ws server: 把 runAgent 的 AgentEvent 流通过 WebSocket 喂给前端
 
+import type { ToolSet } from 'ai'
 import type { ServerWebSocket } from 'bun'
 import { runAgent } from '../agent/loop'
+import { McpManager } from '../mcp/manager'
 import { SandboxManager, type TheNextSandboxConfig } from '../sandbox/manager'
 import type { ApprovalCallback } from '../tools/permission'
 import { getDefaultTools } from '../tools/registry'
@@ -21,7 +18,6 @@ const PREFERRED_PORT = Number(process.env.PORT) || 3001
 const PORT_RANGE = 10
 
 // ── 全局状态 ──
-// 多 WS 并发时,每条 chat 用 id 区分,abortFlags / pendingPermissions 都按 id 索引
 
 const abortFlags = new Map<string, boolean>()
 const pendingPermissions = new Map<string, (approved: boolean) => void>()
@@ -103,18 +99,27 @@ const handleChat = async (
 
   abortFlags.set(id, false)
   const approve = createApprovalCallback(ws, id)
-  const tools = getDefaultTools()
+
+  const tools: ToolSet = toSDKTools(
+    [...getDefaultTools(), ...McpManager.getToolDefinitions()],
+    approve,
+  )
+
+  const mcpInstructions = McpManager.getInstructionsForSystemPrompt()
+  const systemPrompt = [config.systemPrompt, mcpInstructions]
+    .filter(Boolean)
+    .join('\n\n')
 
   const agentContext: AgentContext = {
     config: {
       model: config.model,
       apiKey: config.apiKey,
       baseURL: config.baseURL,
-      systemPrompt: config.systemPrompt,
+      systemPrompt: systemPrompt || undefined,
       maxTokens: config.maxTokens,
     },
     messages: messages.messages,
-    tools: toSDKTools(tools, approve),
+    tools,
   }
 
   try {
@@ -180,7 +185,6 @@ const serverOptions = {
       }
     },
     close() {
-      // 全局清空,假设单连接场景。多连接场景下应按 ws 维度跟踪
       abortFlags.clear()
       for (const resolve of pendingPermissions.values()) {
         resolve(false)
@@ -203,6 +207,8 @@ const startServer = async () => {
     console.warn(`Sandbox: DISABLED${reason ? ` — ${reason}` : ''}`)
   }
 
+  await McpManager.init()
+
   for (let offset = 0; offset < PORT_RANGE; offset++) {
     try {
       const port = PREFERRED_PORT + offset
@@ -219,5 +225,12 @@ const startServer = async () => {
     }
   }
 }
+
+const shutdown = async () => {
+  await McpManager.shutdown()
+  process.exit(0)
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
 
 startServer()

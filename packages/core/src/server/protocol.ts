@@ -1,7 +1,9 @@
+// WebSocket 协议: 前端 ↔ server 的消息类型定义
+
 import type { AgentEvent } from '../types/event'
 import type { Message } from '../types/message'
 
-// ── 请求（前端 → Server）──
+// ── 前端 → Server ──
 
 export type ClientMessage = ChatRequest | AbortRequest | PermissionResponse
 
@@ -16,7 +18,13 @@ export type AbortRequest = {
   readonly id: string
 }
 
-// ── 响应（Server → 前端）──
+export type PermissionResponse = {
+  readonly type: 'permission_response'
+  readonly permissionId: string
+  readonly approved: boolean
+}
+
+// ── Server → 前端 ──
 
 export type ServerMessage = EventMessage | ReadyMessage | ErrorMessage
 
@@ -34,11 +42,4 @@ export type ErrorMessage = {
   readonly type: 'error'
   readonly id: string
   readonly error: string
-}
-
-// 权限请求的响应
-export type PermissionResponse = {
-  readonly type: 'permission_response'
-  readonly permissionId: string
-  readonly approved: boolean
 }
