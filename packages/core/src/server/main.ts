@@ -6,7 +6,7 @@ import { runAgent } from '../agent/loop'
 import { McpManager } from '../mcp/manager'
 import { SandboxManager, type TheNextSandboxConfig } from '../sandbox/manager'
 import type { ApprovalCallback } from '../tools/permission'
-import { getDefaultTools } from '../tools/registry'
+import { assembleToolDefinitions } from '../tools/pool'
 import { toSDKTools } from '../tools/types'
 import type { AgentConfig } from '../types/config'
 import type { AgentContext } from '../types/context'
@@ -100,15 +100,10 @@ const handleChat = async (
   abortFlags.set(id, false)
   const approve = createApprovalCallback(ws, id)
 
-  const tools: ToolSet = toSDKTools(
-    [...getDefaultTools(), ...McpManager.getToolDefinitions()],
-    approve,
-  )
+  const tools: ToolSet = toSDKTools(assembleToolDefinitions(), approve)
 
   const mcpInstructions = McpManager.getInstructionsForSystemPrompt()
-  const systemPrompt = [config.systemPrompt, mcpInstructions]
-    .filter(Boolean)
-    .join('\n\n')
+  const systemPrompt = [config.systemPrompt, mcpInstructions].filter(Boolean).join('\n\n')
 
   const agentContext: AgentContext = {
     config: {
